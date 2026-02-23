@@ -1,0 +1,35 @@
+name: quality_graft_env
+channels:
+  - nvidia
+  - pytorch
+  - conda-forge
+  - pyg
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pip
+  - conda-forge::transformers=4.48.3
+  - pip:
+    - pytorch-lightning==2.5.0
+    - torchmetrics>=1.0.0
+    - hydra-core==1.3.2
+    - omegaconf>=2.3.0
+    - einops==0.8.0
+    - numpy>=1.26,<2.0
+    - scipy==1.13.1
+    - biopython==1.84
+    - tqdm==4.66.4
+    - wandb==0.18.7
+    - dm-tree==0.1.8
+    - einx==0.3.0
+    - fairscale==0.4.13
+    - modelcif==1.2
+    - mashumaro==3.14
+    - pyyaml==6.0.2
+    - scikit-learn==1.6.1
+
+# To create the full environment, run at the end:
+# pip install torch==2.7.0 --index-url https://download.pytorch.org/whl/cu128
+# pip install graphein==1.7.7 --no-deps
+# pip install torch_geometric torch_scatter torch_sparse torch_cluster -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
