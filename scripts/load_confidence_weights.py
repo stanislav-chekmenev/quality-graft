@@ -31,12 +31,12 @@ from pathlib import Path
 
 import torch
 
-# Add boltz submodule to path
-BOLTZ_SRC = Path(__file__).resolve().parent.parent / "submodules" / "boltz" / "src"
+# Add boltz source to path
+BOLTZ_SRC = Path(__file__).resolve().parent.parent / "src"
 if str(BOLTZ_SRC) not in sys.path:
     sys.path.insert(0, str(BOLTZ_SRC))
 
-from boltz.model.modules.confidence import ConfidenceModule
+from src.boltz.model.modules.confidence import ConfidenceModule
 
 
 # ──────────────────────────────────────────────────────────────────────

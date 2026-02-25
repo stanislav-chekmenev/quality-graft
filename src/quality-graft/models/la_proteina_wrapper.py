@@ -28,11 +28,11 @@ import torch
 import torch.nn as nn
 
 # ---------------------------------------------------------------------------
-# Add La-Proteina submodule to Python path so we can import its modules
+# Add La-Proteina source to Python path so we can import its modules
 # when loading checkpoints.
 # ---------------------------------------------------------------------------
 _LA_PROTEINA_ROOT = (
-    Path(__file__).resolve().parent.parent.parent / "submodules" / "la-proteina"
+    Path(__file__).resolve().parent.parent.parent / "la-proteina"
 )
 if str(_LA_PROTEINA_ROOT) not in sys.path:
     sys.path.insert(0, str(_LA_PROTEINA_ROOT))

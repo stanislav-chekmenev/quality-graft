@@ -8,8 +8,8 @@ ckpt/
 # VS Code
 .vscode/
 
-# Data
-data/
+# Data (top-level only, not src/boltz/data/)
+/data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

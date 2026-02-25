@@ -1,6 +1,0 @@
-[submodule "submodules/boltz"]
-	path = submodules/boltz
-	url = https://github.com/jwohlwend/boltz.git
-[submodule "submodules/la-proteina"]
-	path = submodules/la-proteina
-	url = https://github.com/stanislav-chekmenev/la-proteina.git

@@ -173,7 +173,7 @@ Input: PDB structure (sequence + all-atom 3D coordinates)
 
 ---
 
-## 3. Proposed Repository Structure
+## 3. Repository Structure
 
 ```
 quality-graft/
@@ -181,7 +181,6 @@ quality-graft/
 |-- pyproject.toml                    # Project config, dependencies
 |-- environment.yaml                  # Conda environment
 |-- .gitignore
-|-- .gitmodules                       # Git submodule config
 |
 |-- plans/
 |   +-- architecture.md               # This file
@@ -190,13 +189,9 @@ quality-graft/
 |   |-- boltz1_conf.ckpt              # Boltz1 confidence module weights (3.6 GB)
 |   +-- boltz1_conf/epoch17_fixed/    # Extracted checkpoint (directory format, unused)
 |
-|-- submodules/                       # External codebases
-|   |-- la-proteina/                  # Git submodule -> NVIDIA-Digital-Bio/la-proteina
-|   +-- boltz/                        # Git submodule -> jwohlwend/boltz
-|
 |-- configs/                          # Hydra/YAML configs
 |   |-- model/
-|   |   |-- la_proteina.yaml          # La-Proteina full model config (autoencoder + trunk)
+|   |   |-- la_proteina_wrapper.yaml  # La-Proteina wrapper config
 |   |   |-- adaptor.yaml              # Adaptor architecture config (source_mode, dims)
 |   |   +-- confidence_head.yaml      # Boltz1 confidence head config
 |   |-- data/
@@ -209,31 +204,73 @@ quality-graft/
 |-- src/
 |   |-- __init__.py
 |   |
-|   |-- models/                       # Core model code
+|   |-- boltz/                        # Boltz1 confidence module + dependencies (vendored)
 |   |   |-- __init__.py
-|   |   |-- adaptor.py                # Modular adaptor with source_mode (TRAINABLE)
-|   |   |-- confidence_head.py        # Extracted Boltz1 confidence module wrapper
-|   |   |-- la_proteina_wrapper.py    # Full La-Proteina wrapper (autoencoder + trunk + decoder)
-|   |   +-- quality_graft.py          # Full assembled model
-|   |-- data/                         # Data pipeline
-|   |   |-- __init__.py
-|   |   |-- dataset.py                # PyTorch Dataset for training
-|   |   |-- datamodule.py             # Lightning DataModule
-|   |   +-- preprocessing.py          # Feature extraction utilities
+|   |   |-- data/
+|   |   |   |-- __init__.py
+|   |   |   +-- const.py              # Constants (num_tokens, pocket_contact_info, etc.)
+|   |   +-- model/
+|   |       |-- __init__.py
+|   |       |-- layers/               # Transformer building blocks
+|   |       |   |-- __init__.py
+|   |       |   |-- attention.py
+|   |       |   |-- dropout.py
+|   |       |   |-- initialize.py
+|   |       |   |-- outer_product_mean.py
+|   |       |   |-- pair_averaging.py
+|   |       |   |-- transition.py
+|   |       |   |-- triangular_mult.py
+|   |       |   +-- triangular_attention/
+|   |       |       |-- __init__.py
+|   |       |       |-- attention.py
+|   |       |       |-- primitives.py
+|   |       |       +-- utils.py
+|   |       |-- modules/              # High-level modules
+|   |       |   |-- __init__.py
+|   |       |   |-- confidence.py     # ConfidenceModule + ConfidenceHeads
+|   |       |   |-- confidence_utils.py
+|   |       |   |-- encoders.py       # RelativePositionEncoder
+|   |       |   |-- transformers.py
+|   |       |   |-- trunk.py          # InputEmbedder, MSAModule, PairformerModule
+|   |       |   +-- utils.py          # LinearNoBias
+|   |       +-- loss/
+|   |           |-- __init__.py
+|   |           +-- confidence.py     # Confidence loss functions
 |   |
-|   |-- losses/                       # Loss functions
-|   |    |-- __init__.py
-|   |    +-- plddt_loss.py            # pLDDT prediction loss
+|   |-- la-proteina/                  # La-Proteina source (vendored from NVIDIA fork)
+|   |   |-- configs/                  # Model YAML configs for checkpoint loading
+|   |   |-- openfold/                 # OpenFold dependency
+|   |   +-- proteinfoundation/        # Core La-Proteina library
+|   |       |-- proteina.py           # Proteina LightningModule
+|   |       |-- nn/                   # Neural network modules (trunk, etc.)
+|   |       |-- partial_autoencoder/  # Autoencoder (encoder + decoder)
+|   |       |-- flow_matching/        # Flow matching utilities
+|   |       |-- datasets/             # Data loading
+|   |       +-- utils/                # Utilities
 |   |
-|   |-- utils/                        # Utilities
-|   |   |-- __init__.py
-|   |   |-- checkpoint.py             # Weight loading/extraction helpers
-|   |   +-- metrics.py                # Evaluation metrics
-|   +-- train.py                      # Training entry point
+|   +-- quality-graft/                # Quality-Graft project code
+|       |-- models/                   # Core model code
+|       |   |-- __init__.py
+|       |   |-- adaptor.py            # Modular adaptor with source_mode (TRAINABLE)
+|       |   |-- confidence_head.py    # Extracted Boltz1 confidence module wrapper
+|       |   |-- la_proteina_wrapper.py # Full La-Proteina wrapper (autoencoder + trunk + decoder)
+|       |   +-- quality_graft.py      # Full assembled model
+|       |-- data/                     # Data pipeline
+|       |   |-- __init__.py
+|       |   |-- dataset.py            # PyTorch Dataset for training
+|       |   |-- datamodule.py         # Lightning DataModule
+|       |   +-- preprocessing.py      # Feature extraction utilities
+|       |-- losses/                   # Loss functions
+|       |   |-- __init__.py
+|       |   +-- plddt_loss.py         # pLDDT prediction loss
+|       +-- utils/                    # Utilities
+|           |-- __init__.py
+|           |-- checkpoint.py         # Weight loading/extraction helpers
+|           +-- metrics.py            # Evaluation metrics
 |
 |-- scripts/                          # Standalone scripts
 |   |-- load_confidence_weights.py    # Load & verify confidence module from checkpoint
-|   |-- generate_dataset.py           # Run Boltz1 on PDBs -> pLDDT labels
+|   |-- generate_dataset.py           # Run Boltz1 (pip) on PDBs -> pLDDT labels
 |   |-- extract_laproteina_weights.py # Prepare La-Proteina checkpoint
 |   +-- evaluate.py                   # Evaluation script
 |
@@ -894,24 +931,29 @@ data/
 
 ## 8. Dependency Management Strategy
 
-### Git Submodules (for code access)
-- `submodule/la-proteina` -> fork of NVIDIA-Digital-Bio/la-proteina (pinned commit)
-- `submodule/boltz` -> jwohlwend/boltz (pinned commit, used for dataset generation)
+### Vendored Source Code (in `src/`)
+
+External codebases are vendored directly into the repository under `src/` rather than using git submodules. This eliminates submodule complexity while keeping the required code accessible.
+
+- **`src/la-proteina/`**: Vendored from NVIDIA-Digital-Bio/la-proteina fork. Contains `proteinfoundation/` (core library), `openfold/` (dependency), and `configs/` (model configs for checkpoint loading). Not pip-installable; we need source access because the wrapper replicates forward passes to expose intermediate representations.
+
+- **`src/boltz/`**: Minimal vendored subset of jwohlwend/boltz containing **only** the confidence module and its transitive dependencies (25 files). This includes the `ConfidenceModule`, `PairformerModule`, `ConfidenceHeads`, and supporting layers/utilities. All data pipeline, CLI, diffusion, and training code has been removed.
+
+### Boltz pip Package (for dataset generation)
+
+For dataset generation (running full Boltz1 inference to produce pLDDT labels), Boltz is installed as a pip package (`pip install boltz`). This provides the complete inference pipeline without needing to vendor the entire codebase.
 
 ### Python Path Setup
 ```python
-# In pyproject.toml or setup.py, add submodule paths
-# Or use sys.path manipulation in entry points
+# Entry points use sys.path to add src/ directories:
+# src/boltz/ is importable as `boltz.*` (confidence module)
+# src/la-proteina/ is added so `proteinfoundation.*` and `openfold.*` resolve
 ```
 
-### Why submodules over pip install?
-- **La-Proteina**: Not pip-installable; needs source code access (we replicate forward passes in the wrapper to expose intermediates, keeping the original code unmodified)
-- **Boltz1**: pip-installable for dataset generation, but we need source access to extract the confidence module architecture and weights
-
-### Alternative: Hybrid approach
-- `pip install boltz` for dataset generation scripts
-- Git submodule for La-Proteina (need source access for architecture reference)
-- Copy only the confidence module files from Boltz1 into `src/quality_graft/models/boltz_modules/` (submoduled subset)
+### Why this approach?
+- **La-Proteina**: Not pip-installable; needs source code access for the wrapper's replicated forward passes
+- **Boltz1 confidence module**: Needs source access to instantiate the exact architecture and load weights with `strict=True`. Only the confidence module subset is vendored (25 files vs ~100+ in the full repo)
+- **Boltz1 inference**: pip-installable for dataset generation — no need to vendor the full data pipeline, CLI, or training code
 
 ---
 
@@ -1024,8 +1066,8 @@ The frozen pairformer stack (48 blocks, 16 heads, 147.4M params) was trained on 
 ### Completed
 
 1. ~~**Set up repo structure** -- Create directory layout, pyproject.toml, configs~~
-2. ~~**Add La-Proteina as git submodule** -- Fork and pin commit~~
-3. ~~**Add Boltz1 as git submodule** -- Pin commit for reference and dataset generation~~
+2. ~~**Vendor La-Proteina source** -- Copy proteinfoundation/, openfold/, configs/ into `src/la-proteina/`~~
+3. ~~**Vendor Boltz1 confidence module** -- Extract minimal confidence module subset (25 files) into `src/boltz/`~~
 4. ~~**Download confidence weights** -- `boltz1_conf.ckpt` from HuggingFace to `ckpt/`~~
 5. ~~**Create confidence weight loading script** -- `scripts/load_confidence_weights.py` (verified: all keys match)~~
 
