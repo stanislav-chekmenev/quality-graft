@@ -1,0 +1,73 @@
+# La-Proteina wrapper configuration for Quality-Graft
+#
+# Controls how the frozen La-Proteina model is loaded and used to extract
+# intermediate representations (seqs, pair_rep, local_latents) for the
+# downstream quality prediction pipeline.
+#
+# Architecture reference: plans/architecture.md Section 5.1
+
+# ---------------------------------------------------------------------------
+# Checkpoint paths
+# ---------------------------------------------------------------------------
+# Path to the full Proteina model checkpoint (.ckpt)
+# This checkpoint contains the trunk (LocalLatentsTransformer), the autoencoder
+# (encoder + decoder), and the flow matching configuration.
+proteina_ckpt_path: null  # REQUIRED — set via CLI or override
+
+# Optional: override the autoencoder checkpoint path embedded in the Proteina
+# checkpoint config. Set to null to use the path from the checkpoint.
+autoencoder_ckpt_path: null
+
+# ---------------------------------------------------------------------------
+# Wrapper behaviour
+# ---------------------------------------------------------------------------
+# Whether to also run the autoencoder decoder and expose decoder_seqs.
+#   false → Option A (trunk-only baseline)
+#   true  → Option C (hybrid trunk + decoder)
+use_decoder: false
+
+# Flow matching time value for batch construction.
+# t=1.0 means the noisy sample x_t equals the clean data (no noise).
+t_value: 1.0
+
+# Whether to use the encoder's posterior mean instead of sampling from the
+# latent distribution. Set to true for deterministic evaluation.
+deterministic_encode: false
+
+# ---------------------------------------------------------------------------
+# Architecture dimensions (read-only reference — determined by checkpoint)
+# These are NOT used to construct the model; they document the expected
+# dimensions for the adaptor and downstream modules.
+# ---------------------------------------------------------------------------
+# La-Proteina trunk (160M, 14 layers)
+token_dim: 768          # single / sequence representation dimension
+pair_repr_dim: 256      # pair representation dimension
+latent_dim: 8           # local latent dimension (autoencoder output)
+
+# Trunk architecture
+trunk:
+  nlayers: 14
+  nheads: 12
+  dim_cond: 256
+  update_pair_repr: true
+  update_pair_repr_every_n: 2
+  use_tri_mult: false
+
+# Autoencoder encoder architecture
+encoder:
+  nlayers: 12
+  nheads: 12
+  token_dim: 768
+  pair_repr_dim: 256
+  dim_cond: 128
+  update_pair_repr: false
+  latent_z_dim: 8
+
+# Autoencoder decoder architecture (used only when use_decoder=true)
+decoder:
+  nlayers: 12
+  nheads: 12
+  token_dim: 768
+  pair_repr_dim: 256
+  dim_cond: 128
+  update_pair_repr: false
