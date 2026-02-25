@@ -1,7 +1,7 @@
 # Quality-Graft top-level Hydra configuration
 
 defaults:
-  - model/la_proteina_trunk
+  - model/la_proteina_wrapper
   - model/adaptor
   - model/confidence_head
   - data/dataset
