@@ -474,10 +474,10 @@ class LaProteinaWrapper(nn.Module):
         
         # --- Step 2: Construct flow matching batch at t ~= 1 ---
         ca_coords = batch["coords_nm"][:, :, 1, :]       # [b, n, 3]
-        fm_batch = self._construct_fm_batch(batch, ca_coords, z_latent, t=1.0)
+        batch = self._construct_batch(batch, ca_coords, z_latent, t=1.0)
         
         # --- Step 3: Trunk forward (modified to expose intermediates) ---
-        trunk_seqs, trunk_pair, local_latents_out, ca_out = self._trunk_forward(fm_batch)
+        trunk_seqs, trunk_pair, local_latents_out, ca_out = self._trunk_forward(batch)
         
         outputs = {
             "trunk_seqs": trunk_seqs,                     # [b, n, 768]
@@ -499,36 +499,36 @@ class LaProteinaWrapper(nn.Module):
         
         return outputs
     
-    def _construct_fm_batch(self, batch, ca_coords, z_latent, t=1.0):
+    def _construct_batch(self, batch, ca_coords, z_latent, t=1.0):
         """Constructs a flow matching batch at time t (clean sample when t=1)."""
-        fm_batch = dict(batch)  # shallow copy
-        fm_batch["x_t"] = {
+        batch = dict(batch)  # shallow copy
+        batch["x_t"] = {
             "bb_ca": ca_coords,           # [b, n, 3]
             "local_latents": z_latent,    # [b, n, 8]
         }
-        fm_batch["t"] = {
+        batch["t"] = {
             "bb_ca": torch.full((ca_coords.shape[0],), t, device=ca_coords.device),
             "local_latents": torch.full((ca_coords.shape[0],), t, device=ca_coords.device),
         }
-        return fm_batch
+        return batch
     
-    def _trunk_forward(self, fm_batch):
+    def _trunk_forward(self, batch):
         """
         Modified trunk forward that exposes intermediate representations.
         
-        Instead of calling self.trunk(fm_batch) which only returns nn_out dict,
+        Instead of calling self.trunk(batch) which only returns nn_out dict,
         we replicate the forward pass to capture seqs and pair_rep after the
         transformer layers, before the output projection heads.
         """
-        mask = fm_batch["mask"]
+        mask = batch["mask"]
         
         # Conditioning
-        c = self.trunk.cond_factory(fm_batch)
+        c = self.trunk.cond_factory(batch)
         c = self.trunk.transition_c_2(self.trunk.transition_c_1(c, mask), mask)
         
         # Initial representations
-        seqs = self.trunk.init_repr_factory(fm_batch) * mask[..., None]
-        pair_rep = self.trunk.pair_repr_builder(fm_batch)
+        seqs = self.trunk.init_repr_factory(batch) * mask[..., None]
+        pair_rep = self.trunk.pair_repr_builder(batch)
         
         # Run trunk layers
         for i in range(self.trunk.nlayers):
