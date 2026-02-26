@@ -26,15 +26,9 @@ The confidence module was trained with `imitate_trunk=True`, meaning it has its 
 """
 
 import argparse
-import sys
-from pathlib import Path
-
 import torch
 
-# Add boltz source to path
-BOLTZ_SRC = Path(__file__).resolve().parent.parent / "src"
-if str(BOLTZ_SRC) not in sys.path:
-    sys.path.insert(0, str(BOLTZ_SRC))
+from pathlib import Path
 
 from src.boltz.model.modules.confidence import ConfidenceModule
 

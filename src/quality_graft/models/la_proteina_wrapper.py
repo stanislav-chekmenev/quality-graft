@@ -20,22 +20,12 @@ Why replicate forward passes instead of hooks/subclassing?
   and keeps the original La-Proteina code unmodified.
 """
 
-import sys
-from pathlib import Path
-from typing import Dict, Optional
-
 import torch
 import torch.nn as nn
 
-# ---------------------------------------------------------------------------
-# Add La-Proteina source to Python path so we can import its modules
-# when loading checkpoints.
-# ---------------------------------------------------------------------------
-_LA_PROTEINA_ROOT = (
-    Path(__file__).resolve().parent.parent.parent / "la-proteina"
-)
-if str(_LA_PROTEINA_ROOT) not in sys.path:
-    sys.path.insert(0, str(_LA_PROTEINA_ROOT))
+from typing import Dict, Optional
+
+from la_proteina.proteinfoundation.proteina import Proteina
 
 
 class LaProteinaWrapper(nn.Module):
@@ -171,7 +161,6 @@ class LaProteinaWrapper(nn.Module):
         -------
         LaProteinaWrapper
         """
-        from proteinfoundation.proteina import Proteina
 
         kwargs = {}
         if autoencoder_ckpt_path is not None:
