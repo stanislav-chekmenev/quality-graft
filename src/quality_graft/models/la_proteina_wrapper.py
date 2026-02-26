@@ -28,7 +28,7 @@ import torch.nn as nn
 
 from typing import Dict, Optional
 
-from la_proteina.proteinfoundation.proteina import Proteina
+from la_proteina.proteinfoundation.proteina import Proteina, LocalLatentsTransformer
 from la_proteina.proteinfoundation.partial_autoencoder.autoencoder import AutoEncoder
 from la_proteina.proteinfoundation.flow_matching.product_space_flow_matcher import (
     ProductSpaceFlowMatcher,
@@ -81,7 +81,7 @@ class LaProteinaWrapper(nn.Module):
     def __init__(
         self,
         autoencoder: AutoEncoder,
-        trunk: nn.Module,
+        trunk: LocalLatentsTransformer,
         flow_matcher: ProductSpaceFlowMatcher,
         use_decoder: bool = False,
         t_value: float = 1.0,
@@ -391,11 +391,11 @@ class LaProteinaWrapper(nn.Module):
         return encoded["z_latent"]  # [b, n, latent_dim]
 
     def _trunk_forward(
-        self, fm_batch: Dict
+        self, batch: Dict
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Replicated trunk forward that exposes intermediate representations.
 
-        Instead of calling ``self.trunk(fm_batch)`` — which returns only the
+        Instead of calling ``self.trunk(batch)`` — which returns only the
         ``nn_out`` dict with output-head predictions — we replicate the
         internal forward logic of ``LocalLatentsTransformer`` to capture
         ``seqs`` and ``pair_rep`` **after** the transformer layers and
@@ -403,7 +403,7 @@ class LaProteinaWrapper(nn.Module):
 
         Parameters
         ----------
-        fm_batch : dict
+        batch : dict
             Flow-matching batch with ``x_t``, ``t``, ``mask``, etc.
 
         Returns
@@ -417,17 +417,17 @@ class LaProteinaWrapper(nn.Module):
         ca_out : torch.Tensor
             ``[b, n, 3]`` — predicted CA coordinates.
         """
-        mask = fm_batch["mask"]  # [b, n]
+        mask = batch["mask"]  # [b, n]
 
         # --- Conditioning ---
-        c = self.trunk.cond_factory(fm_batch)  # [b, n, dim_cond]
+        c = self.trunk.cond_factory(batch)  # [b, n, dim_cond]
         c = self.trunk.transition_c_2(
             self.trunk.transition_c_1(c, mask), mask
         )  # [b, n, dim_cond]
 
         # --- Initial representations ---
-        seqs = self.trunk.init_repr_factory(fm_batch) * mask[..., None]  # [b, n, 768]
-        pair_rep = self.trunk.pair_repr_builder(fm_batch)  # [b, n, n, 256]
+        seqs = self.trunk.init_repr_factory(batch) * mask[..., None]  # [b, n, 768]
+        pair_rep = self.trunk.pair_repr_builder(batch)  # [b, n, n, 256]
 
         # --- Run trunk transformer layers ---
         for i in range(self.trunk.nlayers):
