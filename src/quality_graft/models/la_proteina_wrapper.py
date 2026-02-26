@@ -29,6 +29,7 @@ import torch.nn as nn
 from typing import Dict, Optional
 
 from la_proteina.proteinfoundation.proteina import Proteina
+from la_proteina.proteinfoundation.partial_autoencoder.autoencoder import AutoEncoder
 from la_proteina.proteinfoundation.flow_matching.product_space_flow_matcher import (
     ProductSpaceFlowMatcher,
 )
@@ -46,19 +47,23 @@ class LaProteinaWrapper(nn.Module):
     intermediate ``seqs`` and ``pair_rep`` tensors that are normally hidden
     as local variables inside the original forward methods.
 
+    The autoencoder is stored as a single ``AutoEncoder`` module (with
+    ``.encoder`` and ``.decoder`` sub-modules) so that the state-dict key
+    hierarchy matches the original Proteina checkpoint layout
+    (``autoencoder.encoder.*``, ``autoencoder.decoder.*``).
+
     Parameters
     ----------
-    autoencoder_encoder : nn.Module
-        The encoder part of La-Proteina's autoencoder (``EncoderTransformer``).
+    autoencoder : AutoEncoder
+        The full La-Proteina autoencoder (contains ``.encoder`` and
+        ``.decoder`` sub-modules).  Mirrors how the original ``Proteina``
+        model stores ``self.autoencoder``.
     trunk : nn.Module
         La-Proteina's trunk network (``LocalLatentsTransformer``).
     flow_matcher : ProductSpaceFlowMatcher
         The product-space flow matcher from the Proteina model.  Used to
         construct properly formatted flow-matching batches (noise sampling,
         interpolation, masking) instead of manually assembling ``x_t``/``t``.
-    autoencoder_decoder : nn.Module, optional
-        The decoder part of La-Proteina's autoencoder (``DecoderTransformer``).
-        Required when ``use_decoder=True``.
     use_decoder : bool
         Whether to run the decoder forward pass and return ``decoder_seqs``.
         Set to ``False`` for Option A (trunk-only baseline), ``True`` for
@@ -75,28 +80,20 @@ class LaProteinaWrapper(nn.Module):
 
     def __init__(
         self,
-        autoencoder_encoder: nn.Module,
+        autoencoder: AutoEncoder,
         trunk: nn.Module,
         flow_matcher: ProductSpaceFlowMatcher,
-        autoencoder_decoder: Optional[nn.Module] = None,
         use_decoder: bool = False,
         t_value: float = 1.0,
         deterministic_encode: bool = False,
     ):
         super().__init__()
-        self.autoencoder_encoder = autoencoder_encoder
+        self.autoencoder = autoencoder
         self.trunk = trunk
         self.fm = flow_matcher
         self.use_decoder = use_decoder
         self.t_value = t_value
         self.deterministic_encode = deterministic_encode
-
-        if use_decoder:
-            if autoencoder_decoder is None:
-                raise ValueError(
-                    "use_decoder=True requires autoencoder_decoder to be provided"
-                )
-            self.decoder = autoencoder_decoder
 
         # Freeze everything -- no gradients through La-Proteina
         self.requires_grad_(False)
@@ -108,7 +105,7 @@ class LaProteinaWrapper(nn.Module):
     @classmethod
     def from_proteina_model(
         cls,
-        proteina_model: "Proteina",  # noqa: F821
+        proteina_model: Proteina,  
         use_decoder: bool = False,
         t_value: float = 1.0,
         deterministic_encode: bool = False,
@@ -130,14 +127,10 @@ class LaProteinaWrapper(nn.Module):
         -------
         LaProteinaWrapper
         """
-        decoder = (
-            proteina_model.autoencoder.decoder if use_decoder else None
-        )
         return cls(
-            autoencoder_encoder=proteina_model.autoencoder.encoder,
+            autoencoder=proteina_model.autoencoder,
             trunk=proteina_model.nn,
             flow_matcher=proteina_model.fm,
-            autoencoder_decoder=decoder,
             use_decoder=use_decoder,
             t_value=t_value,
             deterministic_encode=deterministic_encode,
@@ -392,7 +385,7 @@ class LaProteinaWrapper(nn.Module):
         torch.Tensor
             ``z_latent`` of shape ``[b, n, latent_dim]``.
         """
-        encoded = self.autoencoder_encoder(batch)
+        encoded = self.autoencoder.encoder(batch)
         if self.deterministic_encode:
             return encoded["mean"]  # [b, n, latent_dim]
         return encoded["z_latent"]  # [b, n, latent_dim]
@@ -484,6 +477,8 @@ class LaProteinaWrapper(nn.Module):
             ``[b, n, 768]`` — decoder sequence representations enriched with
             latent and CA coordinate information.
         """
+        decoder = self.autoencoder.decoder
+
         decoder_input = {
             "z_latent": local_latents,
             "ca_coors_nm": ca_coors_nm,
@@ -492,27 +487,27 @@ class LaProteinaWrapper(nn.Module):
         }
 
         # --- Conditioning ---
-        c = self.decoder.cond_factory(decoder_input)
-        c = self.decoder.transition_c_2(
-            self.decoder.transition_c_1(c, mask), mask
+        c = decoder.cond_factory(decoder_input)
+        c = decoder.transition_c_2(
+            decoder.transition_c_1(c, mask), mask
         )
 
         # --- Initial representations ---
         seqs = (
-            self.decoder.init_repr_factory(decoder_input) * mask[..., None]
+            decoder.init_repr_factory(decoder_input) * mask[..., None]
         )  # [b, n, 768]
-        pair_rep = self.decoder.pair_rep_factory(decoder_input)  # [b, n, n, 256]
+        pair_rep = decoder.pair_rep_factory(decoder_input)  # [b, n, n, 256]
 
         # --- Run decoder transformer layers ---
-        for i in range(self.decoder.nlayers):
-            seqs = self.decoder.transformer_layers[i](
+        for i in range(decoder.nlayers):
+            seqs = decoder.transformer_layers[i](
                 seqs, pair_rep, c, mask
             )  # [b, n, 768]
 
-            if self.decoder.update_pair_repr:
-                if i < self.decoder.nlayers - 1:
-                    if self.decoder.pair_update_layers[i] is not None:
-                        pair_rep = self.decoder.pair_update_layers[i](
+            if decoder.update_pair_repr:
+                if i < decoder.nlayers - 1:
+                    if decoder.pair_update_layers[i] is not None:
+                        pair_rep = decoder.pair_update_layers[i](
                             seqs, pair_rep, mask
                         )  # [b, n, n, 256]
 
