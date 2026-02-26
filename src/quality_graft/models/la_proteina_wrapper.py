@@ -170,6 +170,7 @@ class LaProteinaWrapper(nn.Module):
             proteina_ckpt_path,
             map_location=device,
             strict=False,
+            weights_only=False,
             **kwargs,
         )
         proteina_model.eval()

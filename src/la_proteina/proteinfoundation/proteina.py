@@ -105,7 +105,7 @@ class Proteina(L.LightningModule):
             return None, None
         
         logger.info(f"Loading autoencoder from {ae_ckp_path}")
-        autoencoder = AutoEncoder.load_from_checkpoint(ae_ckp_path, strict=False)
+        autoencoder = AutoEncoder.load_from_checkpoint(ae_ckp_path, strict=False, weights_only=False)
         if freeze_params:
             for param in autoencoder.parameters():
                 param.requires_grad = False

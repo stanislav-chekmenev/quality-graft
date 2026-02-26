@@ -10,6 +10,8 @@ dependencies:
   - python=3.11
   - pip
   - conda-forge::transformers=4.48.3
+  - pytest
+  - ml-collections
   - pip:
     - pytorch-lightning==2.5.0
     - torchmetrics>=1.0.0
@@ -28,6 +30,7 @@ dependencies:
     - mashumaro==3.14
     - pyyaml==6.0.2
     - scikit-learn==1.6.1
+    - matplotlib==3.10.8
 
 # To create the full environment, run at the end:
 # pip install torch==2.7.0 --index-url https://download.pytorch.org/whl/cu128
