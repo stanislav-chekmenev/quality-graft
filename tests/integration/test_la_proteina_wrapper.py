@@ -105,7 +105,6 @@ def wrapper():
         deterministic_encode=True,
         device="cpu",
     )
-    model = model.to("cpu")
     model.eval()
     return model
 
