@@ -1,2 +1,22 @@
 # Adaptor module configuration
-# TODO: Populate when implementing the adaptor module (task 7)
+# See plans/architecture.md Section 5.2 for architecture details.
+
+# Source mode: "trunk" (Option A) or "hybrid" (Option C)
+source_mode: "trunk"
+
+# La-Proteina dimension sizes
+trunk_dim: 768
+pair_dim: 256
+latent_dim: 8
+
+# Boltz1 target dimension sizes
+target_s_dim: 384
+target_z_dim: 128
+
+# Attention refinement layers (0 = linear projection only)
+n_attn_layers: 2
+num_heads: 16
+
+# Transition FFN expansion factors
+s_ff_factor: 2
+z_ff_factor: 2
