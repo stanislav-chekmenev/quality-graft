@@ -859,7 +859,7 @@ The frozen pairformer stack (48 blocks, 16 heads, 147.4M params) was trained on 
 ### Phase 1: Option A (Baseline)
 
 6. **Create La-Proteina wrapper** ~~-- Implement `LaProteinaWrapper` wrapping autoencoder encoder + trunk, expose intermediate seqs/pair_rep/local_latents via replicated forward passes~~
-7. **Implement adaptor module** -- `AdaptorModule` with `source_mode="trunk"`, single projection [776->384], pair projection [256->128]
+7. **Implement adaptor module** --~~ `AdaptorModule` with `source_mode="trunk"`, single projection [776->384], pair projection [256->128]~~
 8. **Implement custom confidence forward** -- Bypass input embedding, wire adaptor -> distogram -> pairformer -> heads
 9. **Implement QualityGraft model** -- Assemble wrapper + adaptor + confidence as LightningModule
 10. **Implement dataset generation pipeline** -- Script to run Boltz1 on PDBs and extract pLDDT labels
