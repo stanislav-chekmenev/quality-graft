@@ -23,6 +23,8 @@ Why replicate forward passes instead of hooks/subclassing?
   and keeps the original La-Proteina code unmodified.
 """
 
+import gc
+
 import torch
 import torch.nn as nn
 
@@ -33,6 +35,42 @@ from la_proteina.proteinfoundation.partial_autoencoder.autoencoder import AutoEn
 from la_proteina.proteinfoundation.flow_matching.product_space_flow_matcher import (
     ProductSpaceFlowMatcher,
 )
+
+
+def _remap_legacy_state_dict_keys(
+    state_dict: Dict[str, torch.Tensor],
+) -> Dict[str, torch.Tensor]:
+    """Remap legacy Proteina checkpoint keys to match the current model layout.
+
+    Older Proteina checkpoints stored the autoencoder as a sub-module of the
+    flow matcher, producing state-dict keys like ``fm.autoencoder.encoder.*``.
+    The current ``Proteina`` code stores it directly on the model, expecting
+    keys like ``autoencoder.encoder.*``.
+
+    This function rewrites the ``fm.autoencoder.`` prefix to ``autoencoder.``
+    so that ``load_state_dict`` can match every key without warnings.
+
+    Parameters
+    ----------
+    state_dict : dict
+        Raw state dict loaded from a ``.ckpt`` file.
+
+    Returns
+    -------
+    dict
+        State dict with remapped keys.
+    """
+    _LEGACY_PREFIX = "fm.autoencoder."
+    _NEW_PREFIX = "autoencoder."
+
+    remapped: Dict[str, torch.Tensor] = {}
+    for key, value in state_dict.items():
+        if key.startswith(_LEGACY_PREFIX):
+            new_key = _NEW_PREFIX + key[len(_LEGACY_PREFIX):]
+            remapped[new_key] = value
+        else:
+            remapped[key] = value
+    return remapped
 
 
 class LaProteinaWrapper(nn.Module):
@@ -140,10 +178,10 @@ class LaProteinaWrapper(nn.Module):
     def from_checkpoint(
         cls,
         proteina_ckpt_path: str,
+        device: str,
         use_decoder: bool = False,
         t_value: float = 1.0,
         deterministic_encode: bool = False,
-        device: str = "cpu",
         autoencoder_ckpt_path: Optional[str] = None,
     ) -> "LaProteinaWrapper":
         """Load a wrapper directly from a Proteina checkpoint.
@@ -151,18 +189,28 @@ class LaProteinaWrapper(nn.Module):
         This handles importing the ``Proteina`` class, loading the checkpoint,
         and extracting the relevant sub-modules.
 
+        The checkpoint is loaded manually (rather than via Lightning's
+        ``load_from_checkpoint``) so that legacy state-dict keys can be
+        remapped **before** ``load_state_dict`` is called.  Older Proteina
+        checkpoints stored the autoencoder under the flow matcher
+        (``fm.autoencoder.*``), while the current code stores it directly
+        on the model (``autoencoder.*``).  Without remapping, Lightning
+        emits noisy "missing/unexpected keys" warnings even though the
+        weights are ultimately loaded correctly from the separate AE
+        checkpoint.
+
         Parameters
         ----------
         proteina_ckpt_path : str
             Path to the Proteina ``.ckpt`` file.
+        device : str
+            Device to load the checkpoint onto.
         use_decoder : bool
             Whether to use the decoder (Option C).
         t_value : float
             Flow matching time value.
         deterministic_encode : bool
             Whether to use deterministic encoding.
-        device : str
-            Device to load the checkpoint onto.
         autoencoder_ckpt_path : str, optional
             Override path for the autoencoder checkpoint. If ``None``, uses
             the path embedded in the Proteina checkpoint's config.
@@ -171,24 +219,47 @@ class LaProteinaWrapper(nn.Module):
         -------
         LaProteinaWrapper
         """
-
-        kwargs = {}
-        if autoencoder_ckpt_path is not None:
-            kwargs["autoencoder_ckpt_path"] = autoencoder_ckpt_path
-
-        proteina_model = Proteina.load_from_checkpoint(
-            proteina_ckpt_path,
-            map_location=device,
-            strict=False,
-            **kwargs,
+        # --- 1. Load raw checkpoint ---
+        ckpt = torch.load(
+            proteina_ckpt_path, map_location=device, weights_only=False
         )
-        proteina_model.eval()
+
+        # --- 2. Remap legacy state-dict keys ---
+        # Older checkpoints nest the autoencoder under the flow matcher
+        # (fm.autoencoder.*).  The current Proteina code stores it as a
+        # top-level sub-module (autoencoder.*).  Remap so that
+        # load_state_dict sees matching keys.
+        state_dict = ckpt.get("state_dict", {})
+        remapped_state_dict = _remap_legacy_state_dict_keys(state_dict)
+
+        # --- 3. Instantiate Proteina from saved hparams ---
+        hparams = ckpt.get("hyper_parameters", {})
+        init_kwargs = dict(hparams)
+        if autoencoder_ckpt_path is not None:
+            init_kwargs["autoencoder_ckpt_path"] = autoencoder_ckpt_path
+
+        proteina_model = Proteina(**init_kwargs)
+
+        # --- 4. Load remapped state dict ---
+        # strict=False is still needed because the autoencoder weights
+        # are already loaded from the separate AE checkpoint inside
+        # Proteina.__init__; if they also appear in the main checkpoint
+        # they'll be harmlessly overwritten with the same values.
+        proteina_model.load_state_dict(remapped_state_dict, strict=False)
+
+        # Ensure the entire model (including the separately-loaded AE) is on
+        # the target device.  Proteina.__init__ loads the AE from its own
+        # checkpoint, which may land on a different device (e.g. cuda:0).
+        proteina_model = proteina_model.to(device)
+
+        # Let Proteina restore any extra checkpoint fields (nflops, etc.)
+        proteina_model.on_load_checkpoint(ckpt)
 
         return cls.from_proteina_model(
             proteina_model=proteina_model,
             use_decoder=use_decoder,
             t_value=t_value,
-            deterministic_encode=deterministic_encode,
+            deterministic_encode=deterministic_encode,  
         )
 
     # ------------------------------------------------------------------
