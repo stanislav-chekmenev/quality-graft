@@ -45,6 +45,7 @@ def trunk_inputs(batch_dims, default_dims):
         "trunk_seqs": torch.randn(b, n, default_dims["trunk_dim"]),
         "trunk_pair": torch.randn(b, n, n, default_dims["pair_dim"]),
         "local_latents": torch.randn(b, n, default_dims["latent_dim"]),
+        "ca_coords": torch.randn(b, n, 3),
         "mask": torch.ones(b, n),
     }
 
@@ -138,6 +139,7 @@ class TestAdaptorModuleTrunk:
             trunk_seqs=trunk_inputs["trunk_seqs"],
             trunk_pair=trunk_inputs["trunk_pair"],
             local_latents=trunk_inputs["local_latents"],
+            ca_coords=trunk_inputs["ca_coords"],
         )
 
         b, n = trunk_inputs["trunk_seqs"].shape[:2]
@@ -156,6 +158,7 @@ class TestAdaptorModuleTrunk:
                 trunk_seqs=trunk_inputs["trunk_seqs"],
                 trunk_pair=trunk_inputs["trunk_pair"],
                 local_latents=trunk_inputs["local_latents"],
+                ca_coords=trunk_inputs["ca_coords"],
                 mask=trunk_inputs["mask"],
             )
 
@@ -184,6 +187,7 @@ class TestAdaptorModuleTrunk:
             trunk_seqs=trunk_inputs["trunk_seqs"],
             trunk_pair=trunk_inputs["trunk_pair"],
             local_latents=trunk_inputs["local_latents"],
+            ca_coords=trunk_inputs["ca_coords"],
             mask=None,
         )
         b, n = trunk_inputs["trunk_seqs"].shape[:2]
@@ -242,12 +246,14 @@ class TestAdaptorModuleTrunk:
                 trunk_seqs=trunk_inputs["trunk_seqs"],
                 trunk_pair=trunk_inputs["trunk_pair"],
                 local_latents=trunk_inputs["local_latents"],
+                ca_coords=trunk_inputs["ca_coords"],
                 mask=trunk_inputs["mask"],
             )
             s_attn, z_attn = adaptor_attn(
                 trunk_seqs=trunk_inputs["trunk_seqs"],
                 trunk_pair=trunk_inputs["trunk_pair"],
                 local_latents=trunk_inputs["local_latents"],
+                ca_coords=trunk_inputs["ca_coords"],
                 mask=trunk_inputs["mask"],
             )
 
@@ -265,6 +271,7 @@ class TestAdaptorModuleTrunk:
             trunk_seqs=trunk_inputs["trunk_seqs"],
             trunk_pair=trunk_inputs["trunk_pair"],
             local_latents=trunk_inputs["local_latents"],
+            ca_coords=trunk_inputs["ca_coords"],
             mask=trunk_inputs["mask"],
         )
         loss = s.sum() + z.sum()
@@ -291,6 +298,7 @@ class TestAdaptorModuleHybrid:
             trunk_seqs=trunk_inputs["trunk_seqs"],
             trunk_pair=trunk_inputs["trunk_pair"],
             local_latents=trunk_inputs["local_latents"],
+            ca_coords=trunk_inputs["ca_coords"],
             decoder_seqs=decoder_seqs,
             mask=trunk_inputs["mask"],
         )
@@ -334,12 +342,14 @@ class TestAdaptorModuleHybrid:
                 trunk_seqs=trunk_inputs["trunk_seqs"],
                 trunk_pair=trunk_inputs["trunk_pair"],
                 local_latents=trunk_inputs["local_latents"],
+                ca_coords=trunk_inputs["ca_coords"],
                 mask=trunk_inputs["mask"],
             )
             s_hybrid, z_hybrid = adaptor_hybrid(
                 trunk_seqs=trunk_inputs["trunk_seqs"],
                 trunk_pair=trunk_inputs["trunk_pair"],
                 local_latents=trunk_inputs["local_latents"],
+                ca_coords=trunk_inputs["ca_coords"],
                 decoder_seqs=decoder_seqs,
                 mask=trunk_inputs["mask"],
             )
@@ -361,10 +371,42 @@ class TestAdaptorModuleHybrid:
             trunk_seqs=trunk_inputs["trunk_seqs"],
             trunk_pair=trunk_inputs["trunk_pair"],
             local_latents=trunk_inputs["local_latents"],
+            ca_coords=trunk_inputs["ca_coords"],
             decoder_seqs=None,
         )
         b, n = trunk_inputs["trunk_seqs"].shape[:2]
         assert s.shape == (b, n, default_dims["target_s_dim"])
+
+    def test_ca_distogram_is_added_to_pair_repr(self, trunk_inputs, default_dims):
+        """Different C-alpha coordinates should change pair output z."""
+        adaptor = AdaptorModule(
+            source_mode="trunk",
+            n_attn_layers=0,
+            **default_dims,
+        )
+
+        b, n = trunk_inputs["ca_coords"].shape[:2]
+        ca_coords_a = torch.zeros_like(trunk_inputs["ca_coords"])
+        ca_coords_b = torch.zeros_like(trunk_inputs["ca_coords"])
+        ca_coords_b[:, :, 0] = torch.arange(
+            n, device=ca_coords_b.device, dtype=ca_coords_b.dtype
+        )[None, :].expand(b, -1)
+
+        with torch.no_grad():
+            _, z_a = adaptor(
+                trunk_seqs=trunk_inputs["trunk_seqs"],
+                trunk_pair=trunk_inputs["trunk_pair"],
+                local_latents=trunk_inputs["local_latents"],
+                ca_coords=ca_coords_a,
+            )
+            _, z_b = adaptor(
+                trunk_seqs=trunk_inputs["trunk_seqs"],
+                trunk_pair=trunk_inputs["trunk_pair"],
+                local_latents=trunk_inputs["local_latents"],
+                ca_coords=ca_coords_b,
+            )
+
+        assert not torch.allclose(z_a, z_b)
 
 
 class TestAdaptorModuleParameterCounts:
