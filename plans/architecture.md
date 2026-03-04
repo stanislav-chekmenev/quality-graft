@@ -475,7 +475,7 @@ class QualityGraft(LightningModule):
         
         self.la_proteina = LaProteinaWrapper(
             proteina_model,
-            use_decoder=(source_mode == "hybrid"),
+            use_decoder=(source_mode == "trunk"),
         )  # FROZEN
         
         self.adaptor = AdaptorModule(
@@ -856,7 +856,7 @@ The frozen pairformer stack (48 blocks, 16 heads, 147.4M params) was trained on 
 
 6. **Create La-Proteina wrapper** ~~-- Implement `LaProteinaWrapper` wrapping autoencoder encoder + trunk, expose intermediate seqs/pair_rep/local_latents via replicated forward passes~~
 7. **Implement adaptor module** --~~ `AdaptorModule` with `source_mode="trunk"`, single projection [776->384], pair projection [256->128]~~
-8. **Implement custom confidence forward** -- Bypass input embedding, wire adaptor -> distogram -> pairformer -> heads
+8. **Implement custom confidence forward** --~~ Bypass input embedding, wire adaptor -> distogram -> pairformer -> heads~~
 9. **Implement QualityGraft model** -- Assemble wrapper + adaptor + confidence as LightningModule
 10. **Implement dataset generation pipeline** -- Script to run Boltz1 on PDBs and extract pLDDT labels
 11. **Implement training data pipeline** -- Dataset class, DataModule, feature preprocessing
