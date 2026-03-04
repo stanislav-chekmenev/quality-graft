@@ -11,6 +11,13 @@ loads checkpoint weights strictly from the ``confidence_module.*`` prefix.
 Unlike the native Boltz forward pass, this wrapper bypasses Boltz token/atom
 input embedding and MSA stack because Quality-Graft already provides adapted
 single/pair representations from La-Proteina via the adaptor.
+
+The frozen MSA module (3.2M params) is instantiated for checkpoint compatibility
+but never called.  Its frozen ``s_proj`` and ``msa_proj`` layers expect
+Boltz-native ``InputEmbedder`` outputs and Boltz-preprocessed MSA features
+respectively — neither of which is available in the Quality-Graft pipeline.
+Feeding adapted representations or zeros would produce garbage from the frozen
+projections.  See plans/architecture.md §6 for the full bypass rationale.
 """
 
 from __future__ import annotations
@@ -23,7 +30,6 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from torch import Tensor, nn
 
-from boltz.data import const
 from boltz.model.modules.confidence import ConfidenceModule
 
 
@@ -172,81 +178,6 @@ class BoltzConfidenceHead(nn.Module):
                 f"Unexpected: {unexpected[:5]} (total={len(unexpected)})"
             )
 
-    def _build_msa_single_repr_inputs(
-        self,
-        s: Tensor,
-        msa_aa_tokens: Tensor | None,
-    ) -> Tensor:
-        """Build ``s_inputs`` expected by Boltz ``MSAModule`` from adapted ``s``.
-
-        Uses adapted single representations as the atom-derived component and
-        appends token/profile/deletion/pocket channels in the same layout as
-        Boltz ``InputEmbedder`` output.
-        """
-        batch_size, n_tokens, _ = s.shape
-        num_tokens = const.num_tokens
-        pocket_dim = len(const.pocket_contact_info)
-
-        if msa_aa_tokens is None:
-            res_type = torch.zeros(
-                batch_size,
-                n_tokens,
-                num_tokens,
-                dtype=s.dtype,
-                device=s.device,
-            )
-            profile = torch.zeros_like(res_type)
-        else:
-            if msa_aa_tokens.shape != (batch_size, n_tokens):
-                raise ValueError(
-                    "msa_aa_tokens must have shape [b, n] matching s. "
-                    f"Got {tuple(msa_aa_tokens.shape)} vs {(batch_size, n_tokens)}"
-                )
-            msa_aa_tokens = msa_aa_tokens.long()
-            res_type = nn.functional.one_hot(msa_aa_tokens, num_classes=num_tokens).to(s.dtype)
-            profile = res_type
-
-        deletion_mean = torch.zeros(
-            batch_size,
-            n_tokens,
-            1,
-            dtype=s.dtype,
-            device=s.device,
-        )
-        pocket_feature = torch.zeros(
-            batch_size,
-            n_tokens,
-            pocket_dim,
-            dtype=s.dtype,
-            device=s.device,
-        )
-        return torch.cat([s, res_type, profile, deletion_mean, pocket_feature], dim=-1)
-
-    def _run_optional_msa(
-        self,
-        s: Tensor,
-        z: Tensor,
-        msa_feats: dict[str, Tensor] | None,
-        msa_aa_tokens: Tensor | None,
-        use_kernels: bool,
-    ) -> Tensor:
-        """Apply Boltz MSA module when MSA features are provided."""
-        if msa_feats is None:
-            return z
-
-        required_keys = {"msa", "has_deletion", "deletion_value", "msa_paired", "msa_mask", "token_pad_mask"}
-        missing = required_keys.difference(msa_feats.keys())
-        if missing:
-            raise ValueError(f"msa_feats missing required keys: {sorted(missing)}")
-
-        s_inputs = self._build_msa_single_repr_inputs(s, msa_aa_tokens)
-        return z + self.confidence_module.msa_module(
-            z=z,
-            emb=s_inputs,
-            feats=msa_feats,
-            use_kernels=use_kernels,
-        )
-
     def forward(
         self,
         s: Tensor,
@@ -255,9 +186,6 @@ class BoltzConfidenceHead(nn.Module):
         feats: dict[str, Tensor],
         pred_distogram_logits: Tensor,
         multiplicity: int = 1,
-        s_diffusion: Tensor | None = None,
-        msa_feats: dict[str, Tensor] | None = None,
-        msa_aa_tokens: Tensor | None = None,
         use_kernels: bool = False,
     ) -> dict[str, Tensor]:
         """Run the custom confidence forward pass.
@@ -278,14 +206,6 @@ class BoltzConfidenceHead(nn.Module):
             Distogram logits used by confidence metrics.
         multiplicity : int
             Diffusion multiplicity, defaults to 1.
-        s_diffusion : Tensor | None
-            Optional diffusion single embeddings.
-        msa_feats : dict[str, Tensor] | None
-            Optional MSA feature dict. If ``None`` (default), the MSA module is
-            skipped and behavior matches the current no-MSA path.
-        msa_aa_tokens : Tensor | None
-            Optional amino-acid token ids ``[b, n]`` used to build MSA single
-            input channels (res_type/profile) when ``msa_feats`` is provided.
         use_kernels : bool
             Passed through to pairformer module.
 
@@ -299,12 +219,6 @@ class BoltzConfidenceHead(nn.Module):
         s = s.repeat_interleave(multiplicity, 0)
         z = z.repeat_interleave(multiplicity, 0)
 
-        if confidence_module.use_s_diffusion:
-            if s_diffusion is None:
-                raise ValueError("s_diffusion must be provided when use_s_diffusion=True")
-            s_diffusion = confidence_module.s_diffusion_norm(s_diffusion)
-            s = s + confidence_module.s_diffusion_to_s(s_diffusion)
-
         token_to_rep_atom = feats["token_to_rep_atom"].repeat_interleave(multiplicity, 0)
         x_pred_repr = torch.bmm(token_to_rep_atom.float(), x_pred)
         d = torch.cdist(x_pred_repr, x_pred_repr)
@@ -312,13 +226,6 @@ class BoltzConfidenceHead(nn.Module):
         distogram = (d.unsqueeze(-1) > confidence_module.boundaries).sum(dim=-1).long()
         distogram = confidence_module.dist_bin_pairwise_embed(distogram)
         z = z + distogram
-        z = self._run_optional_msa(
-            s=s,
-            z=z,
-            msa_feats=msa_feats,
-            msa_aa_tokens=msa_aa_tokens,
-            use_kernels=use_kernels,
-        )
 
         mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0).float()
         pair_mask = mask[:, :, None] * mask[:, None, :]

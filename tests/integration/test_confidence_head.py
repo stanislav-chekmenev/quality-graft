@@ -63,36 +63,6 @@ def _make_smoke_features(batch_size: int, n_tokens: int) -> dict[str, torch.Tens
     }
 
 
-def _make_single_sequence_msa_features(
-    batch_size: int,
-    n_tokens: int,
-    aa_token_ids: torch.Tensor,
-) -> dict[str, torch.Tensor]:
-    """Build minimal MSA features for a single random amino-acid sequence."""
-    b, n = batch_size, n_tokens
-    m = 1
-
-    msa = torch.nn.functional.one_hot(
-        aa_token_ids.long(),
-        num_classes=const.num_tokens,
-    ).float().unsqueeze(1)
-
-    has_deletion = torch.zeros(b, m, n, dtype=torch.float32)
-    deletion_value = torch.zeros(b, m, n, dtype=torch.float32)
-    msa_paired = torch.zeros(b, m, n, dtype=torch.float32)
-    msa_mask = torch.ones(b, m, n, dtype=torch.float32)
-    token_pad_mask = torch.ones(b, n, dtype=torch.bool)
-
-    return {
-        "msa": msa,
-        "has_deletion": has_deletion,
-        "deletion_value": deletion_value,
-        "msa_paired": msa_paired,
-        "msa_mask": msa_mask,
-        "token_pad_mask": token_pad_mask,
-    }
-
-
 @pytest.mark.heavy
 @pytest.mark.skipif(not _checkpoint_available(), reason="Confidence checkpoint not found in ckpt/")
 class TestConfidenceHeadIntegration:
@@ -147,37 +117,3 @@ class TestConfidenceHeadIntegration:
         assert out["resolved_logits"].shape == (b, n, 2)
         assert out["pae_logits"].shape == (b, n, n, 64)
 
-    def test_custom_forward_with_single_seq_msa_smoke(self):
-        """Custom confidence forward runs with an optional single-sequence MSA."""
-        head = self._instantiate_from_hydra()
-        head.eval()
-
-        b, n = BATCH_SIZE, N_TOKENS
-        s = torch.randn(b, n, 384)
-        z = torch.randn(b, n, n, 128)
-        x_pred = torch.randn(b, n, 3)
-        pred_distogram_logits = torch.randn(b, n, n, 64)
-        feats = _make_smoke_features(batch_size=b, n_tokens=n)
-
-        aa_token_ids = torch.randint(2, 22, (b, n))
-        msa_feats = _make_single_sequence_msa_features(
-            batch_size=b,
-            n_tokens=n,
-            aa_token_ids=aa_token_ids,
-        )
-
-        with torch.no_grad():
-            out = head(
-                s=s,
-                z=z,
-                x_pred=x_pred,
-                feats=feats,
-                pred_distogram_logits=pred_distogram_logits,
-                multiplicity=1,
-                s_diffusion=torch.randn(b, n, 2 * 384),
-                msa_feats=msa_feats,
-                msa_aa_tokens=aa_token_ids,
-            )
-
-        assert out["plddt_logits"].shape == (b, n, 50)
-        assert out["pde_logits"].shape == (b, n, n, 64)

@@ -621,7 +621,7 @@ graph TD
 | `s_to_z`, `s_to_z_transpose` | **BYPASS** | Requires s_inputs |
 | `s_to_z_prod_*` | **BYPASS** | Requires s_inputs |
 | `s_diffusion_*` | **BYPASS** | Requires diffusion step output |
-| `msa_module` | **BYPASS** | Requires Boltz1 feats and s_inputs |
+| `msa_module` | **BYPASS** | Frozen `s_proj` (455→64) and `msa_proj` (~35→64) expect Boltz-native InputEmbedder outputs and preprocessed MSA features (JackHMMER/HHblits). Feeding adapted representations or zeros produces garbage. Only 3.2M params (2.1% of confidence module). Weights loaded for checkpoint compatibility but never called. |
 | `rel_pos` | **KEEP** optional | Relative position encoding from feats |
 | `token_bonds` | **BYPASS** | Requires Boltz1 feats |
 | `dist_bin_pairwise_embed` | **KEEP** | Can use La-Proteina C-alpha coords for distogram |
