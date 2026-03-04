@@ -1,23 +1,27 @@
 """Boltz confidence head wrapper for Quality-Graft.
 
-Implements the custom forward path from plans/architecture.md todo item 8:
+Implements the custom pLDDT-only forward path from plans/architecture.md §6:
 
-    adaptor outputs (s, z) -> distogram update -> pairformer -> confidence heads
+    adaptor outputs (s, z) -> pairformer -> linear heads (pLDDT / PDE / resolved)
 
 The module instantiates the Boltz ``ConfidenceModule`` with the original
 ``imitate_trunk=True`` architecture (matching ``boltz1_conf.ckpt``) and then
 loads checkpoint weights strictly from the ``confidence_module.*`` prefix.
 
-Unlike the native Boltz forward pass, this wrapper bypasses Boltz token/atom
-input embedding and MSA stack because Quality-Graft already provides adapted
-single/pair representations from La-Proteina via the adaptor.
+Unlike the native Boltz forward pass, this wrapper:
+
+- **Bypasses** Boltz token/atom input embedding, MSA stack, s_inputs
+  projections, recycling, and diffusion conditioning — because Quality-Graft
+  provides adapted single/pair representations from La-Proteina via the
+  adaptor.
+- **Bypasses** ``ConfidenceHeads.forward()`` entirely — aggregate/interface
+  metrics (complex_plddt, iPDE, iPAE, pTM, ipTM) require Boltz-native features
+  (``mol_type``, ``asym_id``, ``pred_distogram_logits``) unavailable here.
+  Instead, the individual linear heads (``to_plddt_logits``, ``to_pde_logits``,
+  ``to_resolved_logits``) are called directly.
 
 The frozen MSA module (3.2M params) is instantiated for checkpoint compatibility
-but never called.  Its frozen ``s_proj`` and ``msa_proj`` layers expect
-Boltz-native ``InputEmbedder`` outputs and Boltz-preprocessed MSA features
-respectively — neither of which is available in the Quality-Graft pipeline.
-Feeding adapted representations or zeros would produce garbage from the frozen
-projections.  See plans/architecture.md §6 for the full bypass rationale.
+but never called.  See plans/architecture.md §6 for the full bypass rationale.
 """
 
 from __future__ import annotations
@@ -55,10 +59,6 @@ class BoltzConfidenceHead(nn.Module):
         Confidence model args (num bins, feature toggles, head args).
     full_embedder_args : dict
         Boltz input embedder args (kept for checkpoint compatibility).
-    msa_args : dict
-        Boltz MSA args.
-    compute_pae : bool
-        Whether to keep PAE head active.
     imitate_trunk : bool
         Must stay ``True`` for boltz1 confidence checkpoint compatibility.
     ckpt_path : str
@@ -80,7 +80,6 @@ class BoltzConfidenceHead(nn.Module):
         pairformer_args: dict[str, Any] | DictConfig,
         confidence_model_args: dict[str, Any] | DictConfig,
         full_embedder_args: dict[str, Any] | DictConfig,
-        msa_args: dict[str, Any] | DictConfig,
         ckpt_path: str,
         ckpt_prefix: str,
         device: str,
@@ -94,7 +93,6 @@ class BoltzConfidenceHead(nn.Module):
         pairformer_args_dict = _to_plain_dict(pairformer_args)
         confidence_model_args_dict = _to_plain_dict(confidence_model_args)
         full_embedder_args_dict = _to_plain_dict(full_embedder_args)
-        msa_args_dict = _to_plain_dict(msa_args)
 
         self.token_s = token_s
         self.token_z = token_z
@@ -110,7 +108,7 @@ class BoltzConfidenceHead(nn.Module):
             imitate_trunk=imitate_trunk,
             pairformer_args=pairformer_args_dict,
             full_embedder_args=full_embedder_args_dict,
-            msa_args=msa_args_dict,
+            msa_args=None,  # MSA module is instantiated but never called
             **confidence_model_args_dict,
         )
         self.confidence_module = self.confidence_module.to(device)
@@ -182,70 +180,55 @@ class BoltzConfidenceHead(nn.Module):
         self,
         s: Tensor,
         z: Tensor,
-        x_pred: Tensor,
-        feats: dict[str, Tensor],
-        pred_distogram_logits: Tensor,
-        multiplicity: int = 1,
+        mask: Tensor,
         use_kernels: bool = False,
     ) -> dict[str, Tensor]:
-        """Run the custom confidence forward pass.
+        """Run the custom pLDDT-only confidence forward pass.
+
+        This bypasses the full ``ConfidenceHeads.forward()`` and calls the
+        individual linear heads directly.  Only the raw per-residue logits are
+        returned — no aggregate/interface metrics (complex_plddt, iPDE, iPAE,
+        pTM, ipTM) because those require Boltz-native features (``mol_type``,
+        ``asym_id``, ``pred_distogram_logits``, etc.) that are unavailable in
+        the Quality-Graft pipeline.
 
         Parameters
         ----------
         s : Tensor
             Adapted single representation ``[b, n, token_s]``.
         z : Tensor
-            Adapted pair representation ``[b, n, n, token_z]``.
-        x_pred : Tensor
-            Predicted atom coordinates ``[b, n_atoms, 3]``.
-        feats : dict[str, Tensor]
-            Features required by Boltz confidence heads (e.g.
-            ``token_to_rep_atom``, ``token_pad_mask``, ``mol_type``, ``asym_id``,
-            ``atom_to_token``, ``atom_pad_mask``, ``frames_idx``).
-        pred_distogram_logits : Tensor
-            Distogram logits used by confidence metrics.
-        multiplicity : int
-            Diffusion multiplicity, defaults to 1.
+            Adapted pair representation ``[b, n, n, token_z]``.  Already
+            contains C-alpha distogram information from the adaptor.
+        mask : Tensor
+            Residue mask ``[b, n]`` (1 = valid, 0 = padding).
         use_kernels : bool
             Passed through to pairformer module.
 
         Returns
         -------
         dict[str, Tensor]
-            Confidence outputs from Boltz ``ConfidenceHeads``.
+            ``plddt_logits``  ``[b, n, 50]``  — per-residue pLDDT bin logits.
+            ``pde_logits``    ``[b, n, n, 64]`` — pairwise distance error logits.
+            ``resolved_logits`` ``[b, n, 2]``  — per-residue resolved logits.
         """
-        confidence_module = self.confidence_module
+        cm = self.confidence_module
 
-        s = s.repeat_interleave(multiplicity, 0)
-        z = z.repeat_interleave(multiplicity, 0)
-
-        token_to_rep_atom = feats["token_to_rep_atom"].repeat_interleave(multiplicity, 0)
-        x_pred_repr = torch.bmm(token_to_rep_atom.float(), x_pred)
-        d = torch.cdist(x_pred_repr, x_pred_repr)
-
-        distogram = (d.unsqueeze(-1) > confidence_module.boundaries).sum(dim=-1).long()
-        distogram = confidence_module.dist_bin_pairwise_embed(distogram)
-        z = z + distogram
-
-        mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0).float()
+        # Pairformer (distogram already in z from adaptor)
         pair_mask = mask[:, :, None] * mask[:, None, :]
-
-        s, z = confidence_module.pairformer_module(
+        s, z = cm.pairformer_module(
             s,
             z,
             mask=mask,
             pair_mask=pair_mask,
             use_kernels=use_kernels,
         )
-        s = confidence_module.final_s_norm(s)
-        z = confidence_module.final_z_norm(z)
+        s = cm.final_s_norm(s)
+        z = cm.final_z_norm(z)
 
-        return confidence_module.confidence_heads(
-            s=s,
-            z=z,
-            x_pred=x_pred,
-            d=d,
-            feats=feats,
-            multiplicity=multiplicity,
-            pred_distogram_logits=pred_distogram_logits,
-        )
+        # Bypass ConfidenceHeads.forward() — call linear heads directly
+        heads = cm.confidence_heads
+        return {
+            "plddt_logits": heads.to_plddt_logits(s),
+            "pde_logits": heads.to_pde_logits(z + z.transpose(1, 2)),
+            "resolved_logits": heads.to_resolved_logits(s),
+        }

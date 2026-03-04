@@ -3,7 +3,8 @@
 These tests verify that:
 1) the confidence head initializes from Hydra/OmegaConf config,
 2) checkpoint weights load strictly with no missing/unexpected keys,
-3) the custom forward pass (adaptor -> distogram -> pairformer -> heads) runs.
+3) the simplified pLDDT-only forward pass (adaptor -> distogram -> pairformer
+   -> linear heads) runs with just (s, z, ca_coords, mask).
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ import hydra
 import pytest
 import torch
 
-from boltz.data import const
 from quality_graft.models.confidence_head import BoltzConfidenceHead
 
 
@@ -29,38 +29,6 @@ N_TOKENS = 8
 
 def _checkpoint_available() -> bool:
     return CONF_CKPT.is_file()
-
-
-def _make_smoke_features(batch_size: int, n_tokens: int) -> dict[str, torch.Tensor]:
-    """Create a minimal feature dictionary required by confidence forward."""
-    b, n = batch_size, n_tokens
-    n_atoms = n
-
-    token_to_rep_atom = torch.eye(n, dtype=torch.float32).unsqueeze(0).repeat(b, 1, 1)
-    atom_to_token = torch.eye(n_atoms, dtype=torch.float32).unsqueeze(0).repeat(b, 1, 1)
-
-    token_pad_mask = torch.ones(b, n, dtype=torch.bool)
-    atom_pad_mask = torch.ones(b, n_atoms, dtype=torch.bool)
-
-    asym_id = torch.zeros(b, n, dtype=torch.long)
-    mol_type = torch.full(
-        (b, n),
-        fill_value=const.chain_type_ids["PROTEIN"],
-        dtype=torch.long,
-    )
-
-    idx = torch.arange(n, dtype=torch.long)
-    frames_idx = torch.stack([idx, idx, idx], dim=-1).unsqueeze(0).repeat(b, 1, 1)
-
-    return {
-        "token_to_rep_atom": token_to_rep_atom,
-        "token_pad_mask": token_pad_mask,
-        "atom_to_token": atom_to_token,
-        "atom_pad_mask": atom_pad_mask,
-        "asym_id": asym_id,
-        "mol_type": mol_type,
-        "frames_idx": frames_idx,
-    }
 
 
 @pytest.mark.heavy
@@ -88,32 +56,21 @@ class TestConfidenceHeadIntegration:
         assert head.confidence_module.imitate_trunk is True
 
     def test_custom_forward_smoke(self):
-        """Custom confidence forward runs and returns key outputs with expected shapes."""
+        """Simplified pLDDT-only forward runs with (s, z, mask)."""
         head = self._instantiate_from_hydra()
         head.eval()
 
         b, n = BATCH_SIZE, N_TOKENS
         s = torch.randn(b, n, 384)
         z = torch.randn(b, n, n, 128)
-        x_pred = torch.randn(b, n, 3)
-        pred_distogram_logits = torch.randn(b, n, n, 64)
-        feats = _make_smoke_features(batch_size=b, n_tokens=n)
+        mask = torch.ones(b, n, dtype=torch.float32)
 
         with torch.no_grad():
-            out = head(
-                s=s,
-                z=z,
-                x_pred=x_pred,
-                feats=feats,
-                pred_distogram_logits=pred_distogram_logits,
-                multiplicity=1,
-                s_diffusion=torch.randn(b, n, 2 * 384),
-            )
+            out = head(s=s, z=z, mask=mask)
 
-        required = {"plddt_logits", "pde_logits", "resolved_logits", "pae_logits"}
+        required = {"plddt_logits", "pde_logits", "resolved_logits"}
         assert required.issubset(out.keys())
         assert out["plddt_logits"].shape == (b, n, 50)
         assert out["pde_logits"].shape == (b, n, n, 64)
         assert out["resolved_logits"].shape == (b, n, 2)
-        assert out["pae_logits"].shape == (b, n, n, 64)
 
