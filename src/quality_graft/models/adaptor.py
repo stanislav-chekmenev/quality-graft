@@ -29,8 +29,6 @@ contains:
 - Pair-biased self-attention on single repr ``s`` (uses pair repr ``z`` as
   bias), matching the ``AttentionPairBias`` pattern used in Boltz1's
   pairformer.
-- SwiGLU transition FFN on single repr ``s``.
-- SwiGLU transition FFN on pair repr ``z``.
 
 Both the attention output projection (``proj_o``) and the transition output
 (``fc3``) are **zero-initialised**, so the attention blocks start as
@@ -53,11 +51,11 @@ Transition from Option A to Option C
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from loguru import logger
 
 from boltz.model.layers.attention import AttentionPairBias
-from boltz.model.layers.transition import Transition
 
 
 class AdaptorAttentionBlock(nn.Module):
@@ -209,10 +207,14 @@ class AdaptorModule(nn.Module):
         num_heads: int = 16,
         s_ff_factor: int = 2,
         z_ff_factor: int = 2,
+        ca_pair_dist_min: float = 0.1,
+        ca_pair_dist_max: float = 3.0,
     ):
         super().__init__()
         self.source_mode = source_mode
         self.n_attn_layers = n_attn_layers
+        self.ca_pair_dist_min = ca_pair_dist_min
+        self.ca_pair_dist_max = ca_pair_dist_max
 
         # Validate the source_mode
         if source_mode not in ("trunk", "hybrid"):
@@ -257,11 +259,45 @@ class AdaptorModule(nn.Module):
                 ]
             )
 
+    def _binned_ca_distogram(self, ca_coords: torch.Tensor) -> torch.Tensor:
+        """Build one-hot pairwise C-alpha distogram in La-Proteina style.
+
+        Uses the same pattern as ``bin_pairwise_distances``:
+        pairwise norm -> evenly-spaced bin limits -> bucketize -> one-hot.
+
+        Parameters
+        ----------
+        ca_coords : torch.Tensor
+            C-alpha coordinates ``[b, n, 3]``.
+
+        Returns
+        -------
+        torch.Tensor
+            One-hot distogram ``[b, n, n, target_z_dim]``.
+        """
+        pair_dists = torch.norm(
+            ca_coords[:, :, None, :] - ca_coords[:, None, :, :],
+            dim=-1,
+        )
+        bin_limits = torch.linspace(
+            self.ca_pair_dist_min,
+            self.ca_pair_dist_max,
+            self.pair_proj[1].out_features - 1,
+            device=ca_coords.device,
+            dtype=ca_coords.dtype,
+        )
+        bin_indices = torch.bucketize(pair_dists, bin_limits)
+        return F.one_hot(
+            bin_indices,
+            num_classes=self.pair_proj[1].out_features,
+        ).to(dtype=ca_coords.dtype)
+
     def forward(
         self,
         trunk_seqs: torch.Tensor,
         trunk_pair: torch.Tensor,
         local_latents: torch.Tensor,
+        ca_coords: torch.Tensor,
         decoder_seqs: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -275,6 +311,8 @@ class AdaptorModule(nn.Module):
             Trunk pair representation ``[b, n, n, 256]``.
         local_latents : torch.Tensor
             Local latent variables ``[b, n, 8]``.
+        ca_coords : torch.Tensor
+            C-alpha coordinates ``[b, n, 3]`` used to build a binned distogram.
         decoder_seqs : torch.Tensor, optional
             Decoder single representation ``[b, n, 768]``.
             Only used when ``source_mode="hybrid"``.
@@ -307,6 +345,9 @@ class AdaptorModule(nn.Module):
 
         # --- Pair representation ---
         z = self.pair_proj(trunk_pair)  # [b, n, n, 128]
+
+        # Add C-alpha distogram (La-Proteina-style one-hot binning)
+        z = z + self._binned_ca_distogram(ca_coords)
 
         # --- Self-attention refinement ---
         if self.n_attn_layers > 0:
