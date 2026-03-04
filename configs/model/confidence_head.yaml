@@ -1,2 +1,59 @@
-# Boltz1 confidence head configuration
-# TODO: Populate when implementing the confidence head wrapper (task 8)
+_target_: quality_graft.models.confidence_head.BoltzConfidenceHead
+
+# Runtime
+device: cpu
+freeze: true
+strict_loading: true
+ckpt_path: ckpt/boltz1_conf.ckpt
+ckpt_prefix: confidence_module.
+
+# Core dims
+token_s: 384
+token_z: 128
+
+# Confidence module compatibility (must match boltz1_conf.ckpt)
+compute_pae: true
+imitate_trunk: true
+
+confidence_model_args:
+  num_dist_bins: 64
+  max_dist: 22
+  add_s_to_z_prod: true
+  add_s_input_to_s: true
+  use_s_diffusion: true
+  add_z_input_to_z: true
+  confidence_args:
+    num_plddt_bins: 50
+    num_pde_bins: 64
+    num_pae_bins: 64
+
+pairformer_args:
+  num_blocks: 48
+  num_heads: 16
+  dropout: 0.25
+  post_layer_norm: false
+  activation_checkpointing: false
+  offload_to_cpu: false
+
+full_embedder_args:
+  atom_s: 128
+  atom_z: 16
+  token_s: 384
+  token_z: 128
+  atoms_per_window_queries: 32
+  atoms_per_window_keys: 128
+  atom_feature_dim: 389
+  no_atom_encoder: false
+  atom_encoder_depth: 3
+  atom_encoder_heads: 4
+
+msa_args:
+  msa_s: 64
+  msa_blocks: 4
+  msa_dropout: 0.15
+  z_dropout: 0.25
+  pairwise_head_width: 32
+  pairwise_num_heads: 4
+  postpone_outer_product: true
+  activation_checkpointing: false
+  offload_to_cpu: false

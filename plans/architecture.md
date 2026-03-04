@@ -621,7 +621,7 @@ graph TD
 | `s_to_z`, `s_to_z_transpose` | **BYPASS** | Requires s_inputs |
 | `s_to_z_prod_*` | **BYPASS** | Requires s_inputs |
 | `s_diffusion_*` | **BYPASS** | Requires diffusion step output |
-| `msa_module` | **BYPASS** | Requires Boltz1 feats and s_inputs |
+| `msa_module` | **BYPASS** | Frozen `s_proj` (455→64) and `msa_proj` (~35→64) expect Boltz-native InputEmbedder outputs and preprocessed MSA features (JackHMMER/HHblits). Feeding adapted representations or zeros produces garbage. Only 3.2M params (2.1% of confidence module). Weights loaded for checkpoint compatibility but never called. |
 | `rel_pos` | **KEEP** optional | Relative position encoding from feats |
 | `token_bonds` | **BYPASS** | Requires Boltz1 feats |
 | `dist_bin_pairwise_embed` | **KEEP** | Can use La-Proteina C-alpha coords for distogram |
@@ -629,60 +629,56 @@ graph TD
 | `final_s_norm`, `final_z_norm` | **KEEP** | Final normalization |
 | `confidence_heads` | **KEEP** | Final prediction heads (pLDDT, PDE, PAE) |
 
-### Implementation: Custom Forward Pass
+### Implementation: Custom pLDDT-Only Forward Pass
 
-Instead of using `ConfidenceModule.forward()` directly, we write a custom forward that:
+Instead of using `ConfidenceModule.forward()` or `ConfidenceHeads.forward()` directly,
+`BoltzConfidenceHead` bypasses all Boltz-native input processing and calls the individual
+linear heads directly.  This removes the need for `x_pred`, `feats`, `pred_distogram_logits`,
+`multiplicity`, and all the aggregate/interface metric computation.
+
+C-alpha distance information is already incorporated into `z` by the adaptor
+(via `AdaptorModule._binned_ca_distogram`), so the confidence head does not need
+`ca_coords` either.
+
+**Signature**: `forward(s, z, mask)`
 
 ```python
-def forward(self, s, z, ca_coords, mask):
-    """
-    Custom forward that bypasses input embedding and injects adapted representations
-    directly into the pairformer stack.
-    
-    Args:
-        s: adapted single repr [b, n, 384] from adaptor
-        z: adapted pair repr [b, n, n, 128] from adaptor
-        ca_coords: C-alpha coordinates [b, n, 3] from La-Proteina
-        mask: residue mask [b, n]
-    """
-    # Distogram from La-Proteina C-alpha coords
-    d = torch.cdist(ca_coords, ca_coords)                            # [b, n, n]
-    boundaries = self.confidence_module.boundaries                   # [num_dist_bins]
-    distogram = (d.unsqueeze(-1) > boundaries).sum(dim=-1).long()    # [b, n, n]
-    z = z + self.confidence_module.dist_bin_pairwise_embed(distogram) # [b, n, n, 128]
-    
-    # Run frozen pairformer stack
+def forward(self, s, z, mask, use_kernels=False):
+    cm = self.confidence_module
+
+    # Pairformer (distogram already in z from adaptor)
     pair_mask = mask[:, :, None] * mask[:, None, :]
-    s, z = self.confidence_module.pairformer_module(
-        s, z, mask=mask, pair_mask=pair_mask
-    )
-    
-    # Final norms
-    s = self.confidence_module.final_s_norm(s)
-    z = self.confidence_module.final_z_norm(z)
-    
-    # Run confidence heads -- only need s for pLDDT
-    plddt_logits = self.confidence_module.confidence_heads.to_plddt_logits(s)
-    
-    return plddt_logits
+    s, z = cm.pairformer_module(s, z, mask=mask, pair_mask=pair_mask,
+                                use_kernels=use_kernels)
+    s = cm.final_s_norm(s)
+    z = cm.final_z_norm(z)
+
+    # Bypass ConfidenceHeads.forward() — call linear heads directly
+    heads = cm.confidence_heads
+    return {
+        "plddt_logits": heads.to_plddt_logits(s),                    # [b, n, 50]
+        "pde_logits": heads.to_pde_logits(z + z.transpose(1, 2)),    # [b, n, n, 64]
+        "resolved_logits": heads.to_resolved_logits(s),              # [b, n, 2]
+    }
 ```
 
-### What `feats` the ConfidenceHeads need
+### Why `ConfidenceHeads.forward()` is bypassed
 
-Looking at `ConfidenceHeads.forward()`, it needs:
-- `s`, `z` -- from pairformer output
-- `x_pred` -- for coordinate-based metrics (can use La-Proteina C-alpha)
-- `d` -- pairwise distances (computed from C-alpha)
-- `feats["mol_type"]` -- molecule type per token (for interface pLDDT weighting)
-- `feats["token_pad_mask"]` -- padding mask
-- `feats["asym_id"]` -- chain assignment (for interface detection)
-- `pred_distogram_logits` -- from trunk distogram module
+`ConfidenceHeads.forward()` computes aggregate/interface metrics that all require
+Boltz-native features unavailable in the Quality-Graft pipeline:
 
-For our use case, we can:
-- Provide `mol_type` as all-protein (constant)
-- Provide `token_pad_mask` from La-Proteina mask
-- Provide `asym_id` from the PDB chain info
-- Skip or mock `pred_distogram_logits` (only used for aggregated metrics, not pLDDT)
+| Metric | Required features |
+|---|---|
+| `complex_plddt` | `feats["token_pad_mask"]` |
+| `complex_iplddt` | `feats["mol_type"]`, `feats["asym_id"]`, `d` |
+| `complex_pde`, `complex_ipde` | `feats["asym_id"]`, `pred_distogram_logits` |
+| `ptm`, `iptm`, `ligand_iptm` | `feats["frames_idx"]`, `feats["mol_type"]`, `feats["asym_id"]`, `x_pred` |
+
+The raw per-residue logits (`to_plddt_logits`, `to_pde_logits`, `to_resolved_logits`)
+only need `s` and `z`, which are available from the adaptor + pairformer.
+
+If aggregate metrics are needed later, an optional `feats` parameter can be added
+to `BoltzConfidenceHead.forward()` to branch into the full `ConfidenceHeads.forward()` path.
 
 ---
 
