@@ -30,22 +30,33 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf
 from torch import Tensor, nn
 
 from boltz.model.modules.confidence import ConfidenceModule
 
 
-def _to_plain_dict(cfg: dict[str, Any] | DictConfig) -> dict[str, Any]:
-    """Convert nested config objects to a plain Python dict."""
-    if isinstance(cfg, DictConfig):
-        return OmegaConf.to_container(cfg, resolve=True)  # type: ignore[return-value]
-    return OmegaConf.to_container(OmegaConf.create(cfg), resolve=True)  # type: ignore[return-value]
+# Default MSA args matching boltz1_conf.ckpt architecture.
+# The MSA module is instantiated for checkpoint weight compatibility but is
+# never called in the Quality-Graft forward path.
+_DEFAULT_MSA_ARGS: dict[str, Any] = {
+    "msa_s": 64,
+    "msa_blocks": 4,
+    "msa_dropout": 0.15,
+    "z_dropout": 0.25,
+    "pairwise_head_width": 32,
+    "pairwise_num_heads": 4,
+    "postpone_outer_product": True,
+    "activation_checkpointing": False,
+    "offload_to_cpu": False,
+}
 
 
 class BoltzConfidenceHead(nn.Module):
     """Quality-Graft wrapper around Boltz ``ConfidenceModule``.
+
+    All configuration is passed as plain Python dicts.  Hydra instantiation
+    (via ``_target_``) happens at the top-level model assembly and converts
+    OmegaConf nodes to plain dicts before reaching this constructor.
 
     Parameters
     ----------
@@ -59,6 +70,10 @@ class BoltzConfidenceHead(nn.Module):
         Confidence model args (num bins, feature toggles, head args).
     full_embedder_args : dict
         Boltz input embedder args (kept for checkpoint compatibility).
+    msa_args : dict | None
+        Boltz MSA module args (kept for checkpoint compatibility; the MSA
+        module is instantiated but never called).  When ``None``, the
+        module-level ``_DEFAULT_MSA_ARGS`` are used.
     imitate_trunk : bool
         Must stay ``True`` for boltz1 confidence checkpoint compatibility.
     ckpt_path : str
@@ -77,22 +92,19 @@ class BoltzConfidenceHead(nn.Module):
         self,
         token_s: int,
         token_z: int,
-        pairformer_args: dict[str, Any] | DictConfig,
-        confidence_model_args: dict[str, Any] | DictConfig,
-        full_embedder_args: dict[str, Any] | DictConfig,
+        pairformer_args: dict[str, Any],
+        confidence_model_args: dict[str, Any],
+        full_embedder_args: dict[str, Any],
         ckpt_path: str,
         ckpt_prefix: str,
         device: str,
+        msa_args: dict[str, Any] | None = None,
         compute_pae: bool = True,
         imitate_trunk: bool = True,
         strict_loading: bool = True,
         freeze: bool = True,
     ):
         super().__init__()
-
-        pairformer_args_dict = _to_plain_dict(pairformer_args)
-        confidence_model_args_dict = _to_plain_dict(confidence_model_args)
-        full_embedder_args_dict = _to_plain_dict(full_embedder_args)
 
         self.token_s = token_s
         self.token_z = token_z
@@ -101,15 +113,18 @@ class BoltzConfidenceHead(nn.Module):
         self.ckpt_prefix = ckpt_prefix
         self.strict_loading = strict_loading
 
+        if msa_args is None:
+            msa_args = dict(_DEFAULT_MSA_ARGS)
+
         self.confidence_module = ConfidenceModule(
             token_s=token_s,
             token_z=token_z,
             compute_pae=compute_pae,
             imitate_trunk=imitate_trunk,
-            pairformer_args=pairformer_args_dict,
-            full_embedder_args=full_embedder_args_dict,
-            msa_args=None,  # MSA module is instantiated but never called
-            **confidence_model_args_dict,
+            pairformer_args=pairformer_args,
+            full_embedder_args=full_embedder_args,
+            msa_args=msa_args,
+            **confidence_model_args,
         )
         self.confidence_module = self.confidence_module.to(device)
 
@@ -123,20 +138,6 @@ class BoltzConfidenceHead(nn.Module):
         if freeze:
             self.confidence_module.requires_grad_(False)
             self.confidence_module.eval()
-
-    @classmethod
-    def from_hydra_config(cls, cfg: DictConfig) -> "BoltzConfidenceHead":
-        """Instantiate from a Hydra/OmegaConf config node.
-
-        The config must include ``_target_: quality_graft.models.confidence_head.BoltzConfidenceHead``.
-        """
-        instance = instantiate(cfg)
-        if not isinstance(instance, cls):
-            raise TypeError(
-                "Hydra config did not instantiate BoltzConfidenceHead. "
-                f"Got: {type(instance)!r}"
-            )
-        return instance
 
     def _load_confidence_weights(
         self,

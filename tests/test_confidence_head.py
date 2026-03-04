@@ -40,7 +40,6 @@ def test_strict_loading_raises_on_missing_keys(monkeypatch, tmp_path):
             pairformer_args={},
             confidence_model_args={"confidence_args": {}},
             full_embedder_args={},
-            msa_args={},
             ckpt_path=str(ckpt_path),
             ckpt_prefix="confidence_module.",
             device="cpu",

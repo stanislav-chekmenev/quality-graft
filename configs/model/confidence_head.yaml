@@ -47,6 +47,7 @@ full_embedder_args:
   atom_encoder_depth: 3
   atom_encoder_heads: 4
 
+# MSA module args (kept for checkpoint compatibility; never called at inference)
 msa_args:
   msa_s: 64
   msa_blocks: 4
