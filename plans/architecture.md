@@ -884,12 +884,12 @@ The frozen pairformer stack (48 blocks, 16 heads, 147.4M params) was trained on 
 6. ~~**Create La-Proteina wrapper** -- Implement `LaProteinaWrapper` wrapping autoencoder encoder + trunk + optional decoder, expose intermediate seqs/pair_rep/local_latents via replicated forward passes~~
 7. ~~**Implement adaptor module** -- `AdaptorModule` with `source_mode="trunk"`, single projection [776->384], pair projection [256->128], C-alpha distogram, configurable attention layers~~
 8. ~~**Implement custom confidence forward** -- `BoltzConfidenceHead` bypassing input embedding, wire adaptor -> pairformer -> linear heads~~
-9. **Implement QualityGraft model** -- Assemble wrapper + adaptor + confidence as LightningModule
+9. ~~**Implement QualityGraft model** -- Assemble wrapper + adaptor + confidence head as nn.Module with dependency injection, forward_from_representations bypass, and Hydra configs~~
 10. **Implement dataset generation pipeline** -- Script to run Boltz1 on PDBs and extract pLDDT labels
 11. **Implement training data pipeline** -- Dataset class, DataModule, feature preprocessing
 12. **Implement loss and metrics** -- pLDDT cross-entropy loss (50 bins), evaluation metrics
 13. **Implement training loop** -- Training script with configs
-14. **Write tests** -- Unit tests for wrapper, adaptor, model assembly, data pipeline
+14. **Write tests** -- Unit tests for wrapper, adaptor, ~~model assembly~~, data pipeline
 15. **Train and evaluate Option A** -- Establish baseline performance
 
 ### Phase 2: Option C (Hybrid)

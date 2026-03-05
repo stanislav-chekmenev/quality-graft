@@ -1,0 +1,23 @@
+# La-Proteina wrapper configuration
+# See plans/architecture.md Section 5.1 for architecture details.
+#
+# NOTE: LaProteinaWrapper uses factory class methods (from_checkpoint or
+# from_proteina_model) rather than direct __init__ instantiation.  These
+# parameters are consumed by the QualityGraft assembly logic or by
+# calling LaProteinaWrapper.from_checkpoint() directly.
+
+# Checkpoint paths
+proteina_ckpt_path: ckpt/LD1_ucond_notri_512.ckpt
+autoencoder_ckpt_path: ckpt/AE1_ucond_512.ckpt
+
+# Device for loading
+device: cpu
+
+# Whether to use the decoder (Option A: false, Option C: true)
+use_decoder: false
+
+# Flow matching time value (1.0 = clean sample)
+t_value: 1.0
+
+# Whether to use deterministic encoding (posterior mean vs sampled)
+deterministic_encode: true

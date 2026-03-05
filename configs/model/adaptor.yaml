@@ -1,6 +1,8 @@
 # Adaptor module configuration
 # See plans/architecture.md Section 5.2 for architecture details.
 
+_target_: quality_graft.models.adaptor.AdaptorModule
+
 # Source mode: "trunk" (Option A) or "hybrid" (Option C)
 source_mode: "trunk"
 
