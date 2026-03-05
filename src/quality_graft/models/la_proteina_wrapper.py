@@ -23,8 +23,6 @@ Why replicate forward passes instead of hooks/subclassing?
   and keeps the original La-Proteina code unmodified.
 """
 
-import gc
-
 import torch
 import torch.nn as nn
 

@@ -3,6 +3,7 @@
 from .adaptor import AdaptorAttentionBlock, AdaptorModule
 from .confidence_head import BoltzConfidenceHead
 from .la_proteina_wrapper import LaProteinaWrapper
+from .quality_graft import QualityGraft
 
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     "AdaptorModule",
     "BoltzConfidenceHead",
     "LaProteinaWrapper",
+    "QualityGraft",
 ]

@@ -87,15 +87,15 @@ Input: PDB structure (sequence + all-atom 3D coordinates)
 ### Option A: Trunk Only (Baseline)
 
 ```
-    seqs [b,n,768]   pair_rep [b,n,n,256]   local_latents_out [b,n,8]
-       |                    |                       |
-       |                    |                       |
-       +----------+---------+                       |
-                  |                                  |
-                  v                                  |
-    +---------------------------+                    |
-    | Adaptor (TRAINABLE)       |                    |
-    | source_mode = "trunk"     |<-------------------+
+    seqs [b,n,768]   pair_rep [b,n,n,256]   local_latents_out [b,n,8]   ca_out [b,n,3]
+       |                    |                       |                       |
+       |                    |                       |                       |
+       +----------+---------+                       |                       |
+                  |                                  |                       |
+                  v                                  |                       |
+    +---------------------------+                    |                       |
+    | Adaptor (TRAINABLE)       |                    |                       |
+    | source_mode = "trunk"     |<-------------------+-----------------------+
     |                           |
     | single_in = cat(seqs,     |
     |              local_latents)|  [b,n,776]
@@ -103,6 +103,7 @@ Input: PDB structure (sequence + all-atom 3D coordinates)
     |                           |
     | pair_proj(pair_rep)       |
     |            -> z [b,n,n,128]|
+    | z += distogram(ca_out)    |
     +----------+---+------------+
                |   |
                v   v
@@ -112,7 +113,7 @@ Input: PDB structure (sequence + all-atom 3D coordinates)
     +----------+----------------+
                |
                v
-        pLDDT logits [b,n,50]
+        pLDDT/PDE/resolved logits
 ```
 
 ### Option C: Hybrid Trunk + Decoder (Advanced)
@@ -135,9 +136,9 @@ Input: PDB structure (sequence + all-atom 3D coordinates)
        |                    |                                 |
        |                    |                       decoder_seqs [b,n,768]
        |                    |                                 |
-       +--------------------+-------------+-------------------+
-                            |             |
-                            v             v
+       +--------------------+------+------+-------------------+
+                            |      |      |
+                            v      v      v
               +-----------------------------------+
               | Adaptor (TRAINABLE)               |
               | source_mode = "hybrid"            |
@@ -150,6 +151,7 @@ Input: PDB structure (sequence + all-atom 3D coordinates)
               |                                   |
               | pair_proj(trunk_pair_rep)          |
               |            -> z [b,n,n,128]        |
+              | z += distogram(ca_out)             |
               +-----------+---+-------------------+
                           |   |
                           v   v
@@ -159,7 +161,7 @@ Input: PDB structure (sequence + all-atom 3D coordinates)
               +-----------------------------------+
                           |
                           v
-                   pLDDT logits [b,n,50]
+                   pLDDT/PDE/resolved logits
 ```
 
 ### Key Design Decisions for A-to-C Transition
@@ -202,7 +204,6 @@ quality-graft/
 |   +-- config.yaml                   # Top-level Hydra config
 |
 |-- src/
-|   |-- __init__.py
 |   |
 |   |-- boltz/                        # Boltz1 confidence module + dependencies (vendored)
 |   |   |-- __init__.py
@@ -237,7 +238,8 @@ quality-graft/
 |   |           |-- __init__.py
 |   |           +-- confidence.py     # Confidence loss functions
 |   |
-|   |-- la-proteina/                  # La-Proteina source (vendored from NVIDIA fork)
+|   |-- la_proteina/                  # La-Proteina source (vendored from NVIDIA fork)
+|   |   |-- __init__.py
 |   |   |-- configs/                  # Model YAML configs for checkpoint loading
 |   |   |-- openfold/                 # OpenFold dependency
 |   |   +-- proteinfoundation/        # Core La-Proteina library
@@ -248,11 +250,12 @@ quality-graft/
 |   |       |-- datasets/             # Data loading
 |   |       +-- utils/                # Utilities
 |   |
-|   +-- quality-graft/                # Quality-Graft project code
+|   +-- quality_graft/                # Quality-Graft project code
+|       |-- __init__.py
 |       |-- models/                   # Core model code
 |       |   |-- __init__.py
 |       |   |-- adaptor.py            # Modular adaptor with source_mode (TRAINABLE)
-|       |   |-- confidence_head.py    # Extracted Boltz1 confidence module wrapper
+|       |   |-- confidence_head.py    # Boltz1 confidence module wrapper (BoltzConfidenceHead)
 |       |   |-- la_proteina_wrapper.py # Full La-Proteina wrapper (autoencoder + trunk + decoder)
 |       |   +-- quality_graft.py      # Full assembled model
 |       |-- data/                     # Data pipeline
@@ -278,9 +281,16 @@ quality-graft/
 |   +-- exploration.ipynb
 |
 +-- tests/
+    |-- __init__.py
+    |-- conftest.py
     |-- test_adaptor.py
+    |-- test_confidence_head.py
     |-- test_data_pipeline.py
-    +-- test_model_assembly.py
+    |-- test_model_assembly.py
+    +-- integration/
+        |-- __init__.py
+        |-- test_confidence_head.py
+        +-- test_la_proteina_wrapper.py
 ```
 
 ---
@@ -428,17 +438,24 @@ The script [`scripts/load_confidence_weights.py`](scripts/load_confidence_weight
 
 ## 5. Key Module Designs
 
-### 5.1 La-Proteina Wrapper (`src/models/la_proteina_wrapper.py`)
+### 5.1 La-Proteina Wrapper (`src/quality_graft/models/la_proteina_wrapper.py`)
 
-Wraps the **full La-Proteina pipeline**: autoencoder encoder + trunk + optional decoder. All components frozen.
+Wraps the **full La-Proteina pipeline**: autoencoder encoder + flow matcher + trunk + optional decoder. All components frozen.
+
+The constructor takes three sub-modules directly (`autoencoder`, `trunk`, `flow_matcher`) rather than a full `Proteina` model. Two factory class methods are provided for convenience:
+
+- `LaProteinaWrapper.from_proteina_model(proteina_model, ...)` — extracts sub-modules from a loaded `Proteina` instance.
+- `LaProteinaWrapper.from_checkpoint(ckpt_path, device, ...)` — loads a checkpoint, remaps legacy state-dict keys, instantiates `Proteina`, and wraps.
+
+The wrapper uses the `ProductSpaceFlowMatcher` to construct flow-matching batches at a fixed `t` (defaulting to `t=1.0` for clean samples), mirroring `Proteina.add_clean_samples` + `fm.corrupt_batch` but with deterministic time.
 
 **Why replicate forward passes instead of subclassing?**
 
 Both the trunk's and decoder's `forward()` methods return only their final output dicts (nn_out / decoded coords+logits). The intermediate `seqs` and `pair_rep` tensors are local variables. Replicating the forward pass in the wrapper is cleaner than monkey-patching or using hooks, and keeps the original La-Proteina code unmodified.
 
-### 5.2 Adaptor Module (`src/models/adaptor.py`)
+### 5.2 Adaptor Module (`src/quality_graft/models/adaptor.py`)
 
-The adaptor is parameterized by `source_mode` to support smooth A-to-C transition. It's implemented as 1-2 attention layers.
+The adaptor is parameterized by `source_mode` to support smooth A-to-C transition. It uses configurable self-attention layers (0–N via `n_attn_layers`) in the target Boltz1 dimension space, plus a C-alpha distogram that is added to the pair representation. The adaptor's `forward()` requires `ca_coords` in addition to `trunk_seqs`, `trunk_pair`, `local_latents`, and optionally `decoder_seqs`.
 
 **Transition from Option A to Option C:**
 
@@ -449,18 +466,20 @@ The adaptor is parameterized by `source_mode` to support smooth A-to-C transitio
 
 Because `decoder_fusion` starts at zero output, the model initially behaves identically to Option A. The decoder signal is gradually learned.
 
-### 5.3 Confidence Head Wrapper (`src/models/confidence_head.py`)
+### 5.3 Confidence Head Wrapper (`src/quality_graft/models/confidence_head.py`)
 
-Wraps the Boltz1 `ConfidenceModule` with its pretrained weights:
+The class `BoltzConfidenceHead` wraps the Boltz1 `ConfidenceModule` with its pretrained weights:
 
-- Loads the `confidence_module.*` keys from `ckpt/boltz1_conf.ckpt`
+- Instantiates `ConfidenceModule` with explicit architecture parameters (`token_s`, `token_z`, `pairformer_args`, `confidence_model_args`, `full_embedder_args`, `msa_args`, etc.) matching the `boltz1_conf.ckpt` architecture
+- Loads the `confidence_module.*` keys from checkpoint via a configurable `ckpt_prefix`
 - The module includes its own pairformer stack + `ConfidenceHeads`
-- `ConfidenceHeads.to_plddt_logits(s)` produces pLDDT from single repr
-- All weights frozen via `requires_grad_(False)`
+- The MSA module is instantiated for checkpoint compatibility but never called
+- All weights frozen via `requires_grad_(False)` (configurable via `freeze` parameter)
+- `forward(s, z, mask)` returns a dict with `plddt_logits`, `pde_logits`, and `resolved_logits`
 
-**Important**: We use a **custom forward pass** that bypasses the input embedding pipeline (see Section 6).
+**Important**: We use a **custom forward pass** that bypasses the input embedding pipeline (see Section 6). C-alpha distogram information is already incorporated into `z` by the adaptor, so the confidence head does not receive `ca_coords`.
 
-### 5.4 Full Model Assembly (`src/models/quality_graft.py`)
+### 5.4 Full Model Assembly (`src/quality_graft/models/quality_graft.py`)
 
 ```python
 class QualityGraft(LightningModule):
@@ -474,8 +493,10 @@ class QualityGraft(LightningModule):
         super().__init__()
         
         self.la_proteina = LaProteinaWrapper(
-            proteina_model,
-            use_decoder=(source_mode == "trunk"),
+            autoencoder=autoencoder,
+            trunk=trunk,
+            flow_matcher=flow_matcher,
+            use_decoder=(source_mode == "hybrid"),
         )  # FROZEN
         
         self.adaptor = AdaptorModule(
@@ -487,8 +508,15 @@ class QualityGraft(LightningModule):
             target_z_dim=128,
         )  # TRAINABLE
         
-        self.confidence_head = ConfidenceHeadWrapper(
+        self.confidence_head = BoltzConfidenceHead(
+            token_s=384,
+            token_z=128,
+            pairformer_args=...,
+            confidence_model_args=...,
+            full_embedder_args=...,
             ckpt_path="ckpt/boltz1_conf.ckpt",
+            ckpt_prefix="confidence_module.",
+            device="cpu",
         )  # FROZEN
     
     def forward(self, batch):
@@ -500,21 +528,23 @@ class QualityGraft(LightningModule):
             trunk_seqs=reprs["trunk_seqs"],
             trunk_pair=reprs["trunk_pair"],
             local_latents=reprs["local_latents"],
+            ca_coords=reprs["ca_coords"],
             decoder_seqs=reprs.get("decoder_seqs", None),
         )
         
         # 3. Run confidence prediction (frozen)
-        plddt_logits = self.confidence_head(
+        outputs = self.confidence_head(
             s=s,
             z=z,
-            ca_coords=reprs["ca_coords"],
             mask=batch["mask"],
         )
+        # outputs is a dict: {plddt_logits, pde_logits, resolved_logits}
         
-        return plddt_logits
+        return outputs
     
     def training_step(self, batch, batch_idx):
-        plddt_logits = self.forward(batch)
+        outputs = self.forward(batch)
+        plddt_logits = outputs["plddt_logits"]
         plddt_labels = batch["plddt_labels"]  # [b, n] ground truth bins
         loss = F.cross_entropy(
             plddt_logits.view(-1, 50),
@@ -599,15 +629,16 @@ graph TD
         LP_L --> CAT
         CAT --> SPROJ[single_proj: 776 to 384]
         LP_P --> ZPROJ[pair_proj: 256 to 128]
-        LP_CA --> DISTO[Distogram Embedding]
-        DISTO --> ZPROJ
+        LP_CA --> DISTO[Distogram: _binned_ca_distogram]
+        DISTO --> ZADD[z += distogram]
+        ZPROJ --> ZADD
     end
 
     subgraph Boltz1_Confidence_FROZEN
         SPROJ --> |s| PF[Pairformer Stack x48]
-        ZPROJ --> |z| PF
-        PF --> HEADS[ConfidenceHeads]
-        HEADS --> PLDDT[pLDDT logits: b,n,50]
+        ZADD --> |z| PF
+        PF --> HEADS[ConfidenceHeads -- linear heads called directly]
+        HEADS --> PLDDT[pLDDT/PDE/resolved logits]
     end
 ```
 
@@ -716,7 +747,7 @@ data/
 
 External codebases are vendored directly into the repository under `src/` rather than using git submodules. This eliminates submodule complexity while keeping the required code accessible.
 
-- **`src/la-proteina/`**: Vendored from NVIDIA-Digital-Bio/la-proteina fork. Contains `proteinfoundation/` (core library), `openfold/` (dependency), and `configs/` (model configs for checkpoint loading). Not pip-installable; we need source access because the wrapper replicates forward passes to expose intermediate representations.
+- **`src/la_proteina/`**: Vendored from NVIDIA-Digital-Bio/la-proteina fork. Contains `proteinfoundation/` (core library), `openfold/` (dependency), and `configs/` (model configs for checkpoint loading). Not pip-installable; we need source access because the wrapper replicates forward passes to expose intermediate representations.
 
 - **`src/boltz/`**: Minimal vendored subset of jwohlwend/boltz containing **only** the confidence module and its transitive dependencies (25 files). This includes the `ConfidenceModule`, `PairformerModule`, `ConfidenceHeads`, and supporting layers/utilities. All data pipeline, CLI, diffusion, and training code has been removed.
 
@@ -728,7 +759,7 @@ For dataset generation (running full Boltz1 inference to produce pLDDT labels), 
 ```python
 # Entry points use sys.path to add src/ directories:
 # src/boltz/ is importable as `boltz.*` (confidence module)
-# src/la-proteina/ is added so `proteinfoundation.*` and `openfold.*` resolve
+# src/la_proteina/ is added so `la_proteina.proteinfoundation.*` and `la_proteina.openfold.*` resolve
 ```
 
 ### Why this approach?
@@ -775,13 +806,9 @@ For dataset generation (running full Boltz1 inference to produce pLDDT labels), 
 
 ### Adaptor Scaling Strategy
 
-1. **Phase 1a**: Linear projection adaptor only (Option A). Train and evaluate.
-2. **Phase 1b**: If Phase 1a underperforms, add 1-2 self-attention layers in the adaptor.
-3. **Phase 2a**: Transition to Option C with linear adaptor.
-4. **Phase 2b**: If needed, add attention layers in the adaptor for Option C.
-5. **Phase 3**: If still insufficient, add distribution matching loss or progressive unfreezing of first few pairformer layers.
-
----
+1. **Phase 1**: Adaptor with 1-2 self-attention layers.
+2. **Phase 2**: If Phase 1a underperforms, transition to Option C with attention layers in the adaptor for Option C.
+3. **Phase 3**: If still insufficient, add distribution matching loss or progressive unfreezing of first few pairformer layers.
 
 ## 10. Adaptor-Pairformer Compatibility: Risks and Mitigations
 
@@ -847,28 +874,28 @@ The frozen pairformer stack (48 blocks, 16 heads, 147.4M params) was trained on 
 ### Completed
 
 1. ~~**Set up repo structure** -- Create directory layout, pyproject.toml, configs~~
-2. ~~**Vendor La-Proteina source** -- Copy proteinfoundation/, openfold/, configs/ into `src/la-proteina/`~~
+2. ~~**Vendor La-Proteina source** -- Copy proteinfoundation/, openfold/, configs/ into `src/la_proteina/`~~
 3. ~~**Vendor Boltz1 confidence module** -- Extract minimal confidence module subset (25 files) into `src/boltz/`~~
 4. ~~**Download confidence weights** -- `boltz1_conf.ckpt` from HuggingFace to `ckpt/`~~
 5. ~~**Create confidence weight loading script** -- `scripts/load_confidence_weights.py` (verified: all keys match)~~
 
 ### Phase 1: Option A (Baseline)
 
-6. **Create La-Proteina wrapper** ~~-- Implement `LaProteinaWrapper` wrapping autoencoder encoder + trunk, expose intermediate seqs/pair_rep/local_latents via replicated forward passes~~
-7. **Implement adaptor module** --~~ `AdaptorModule` with `source_mode="trunk"`, single projection [776->384], pair projection [256->128]~~
-8. **Implement custom confidence forward** --~~ Bypass input embedding, wire adaptor -> distogram -> pairformer -> heads~~
-9. **Implement QualityGraft model** -- Assemble wrapper + adaptor + confidence as LightningModule
+6. ~~**Create La-Proteina wrapper** -- Implement `LaProteinaWrapper` wrapping autoencoder encoder + trunk + optional decoder, expose intermediate seqs/pair_rep/local_latents via replicated forward passes~~
+7. ~~**Implement adaptor module** -- `AdaptorModule` with `source_mode="trunk"`, single projection [776->384], pair projection [256->128], C-alpha distogram, configurable attention layers~~
+8. ~~**Implement custom confidence forward** -- `BoltzConfidenceHead` bypassing input embedding, wire adaptor -> pairformer -> linear heads~~
+9. ~~**Implement QualityGraft model** -- Assemble wrapper + adaptor + confidence head as nn.Module with dependency injection, forward_from_representations bypass, and Hydra configs~~
 10. **Implement dataset generation pipeline** -- Script to run Boltz1 on PDBs and extract pLDDT labels
 11. **Implement training data pipeline** -- Dataset class, DataModule, feature preprocessing
 12. **Implement loss and metrics** -- pLDDT cross-entropy loss (50 bins), evaluation metrics
 13. **Implement training loop** -- Training script with configs
-14. **Write tests** -- Unit tests for wrapper, adaptor, model assembly, data pipeline
+14. **Write tests** -- Unit tests for wrapper, adaptor, ~~model assembly~~, data pipeline
 15. **Train and evaluate Option A** -- Establish baseline performance
 
 ### Phase 2: Option C (Hybrid)
 
-16. **Extend La-Proteina wrapper** -- Add `use_decoder=True` flag, implement `_decoder_forward()` exposing intermediate seqs
-17. **Extend adaptor module** -- Add `source_mode="hybrid"` with `decoder_fusion` (zero-initialized)
+16. ~~**Extend La-Proteina wrapper** -- Add `use_decoder=True` flag, implement `_decoder_forward()` exposing intermediate seqs~~ *(already implemented in Phase 1)*
+17. ~~**Extend adaptor module** -- Add `source_mode="hybrid"` with `decoder_fusion` (zero-initialized)~~ *(already implemented in Phase 1)*
 18. **Load Option A weights** -- Transfer `single_proj` and `pair_proj` weights to Option C model
 19. **Fine-tune Option C** -- Train with decoder signal, evaluate improvement over Option A
 20. **Compare A vs C** -- Quantitative comparison on validation set
