@@ -36,3 +36,4 @@ dependencies:
 # pip install torch==2.7.0 --index-url https://download.pytorch.org/whl/cu128
 # pip install graphein==1.7.7 --no-deps
 # pip install torch_geometric torch_scatter torch_sparse torch_cluster -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
+# pip install boltz[cuda] -U
