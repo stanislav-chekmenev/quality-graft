@@ -9,6 +9,9 @@ ckpt/
 # VS Code
 .vscode/
 
+# Logging
+wandb
+
 # Data (top-level only, not src/boltz/data/)
 /data/
 

@@ -1,2 +1,4 @@
 # Dataset configuration
-# TODO: Populate when implementing the data pipeline (task 11)
+labels_dir: data/processed/labels/
+splits_dir: data/processed/splits/
+num_plddt_bins: 50
