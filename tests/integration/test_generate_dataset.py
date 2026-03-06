@@ -19,10 +19,10 @@ class TestGenerateDataset:
     """End-to-end tests for the dataset generation script."""
 
     def test_1ubq_end_to_end(self, tmp_path):
-        """Run full pipeline on 1ubq.pdb and verify output."""
-        pdb_path = PROJECT_ROOT / "data" / "1ubq.pdb"
-        if not pdb_path.exists():
-            pytest.skip("data/1ubq.pdb not found")
+        """Run full pipeline on 1ubq.cif and verify output."""
+        cif_path = PROJECT_ROOT / "data" / "1ubq.cif"
+        if not cif_path.exists():
+            pytest.skip("data/1ubq.cif not found")
 
         output_dir = tmp_path / "labels"
         work_dir = tmp_path / "boltz_work"
@@ -30,7 +30,7 @@ class TestGenerateDataset:
         result = subprocess.run(
             [
                 sys.executable, "scripts/generate_dataset.py",
-                "--single-pdb", str(pdb_path),
+                "--single-cif", str(cif_path),
                 "--output-dir", str(output_dir),
                 "--work-dir", str(work_dir),
                 "--no-wandb",
@@ -53,7 +53,7 @@ class TestGenerateDataset:
         # Load and verify
         data = torch.load(pt_file, weights_only=False)
 
-        assert data["pdb_id"] == "1ubq"
+        assert data["structure_id"] == "1ubq"
         assert "A" in data["sequences"]
         assert data["sequences"]["A"].startswith("MQIFVKTLTG")
         assert data["n_residues"] == 76

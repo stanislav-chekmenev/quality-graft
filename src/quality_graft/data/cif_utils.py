@@ -1,31 +1,31 @@
-"""Utilities for parsing PDB files and generating Boltz-compatible YAML inputs."""
+"""Utilities for parsing mmCIF files and generating Boltz-compatible YAML inputs."""
 
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from Bio.PDB import PDBParser
+from Bio.PDB import MMCIFParser
 from Bio.PDB.Polypeptide import is_aa, index_to_one, three_to_index
 
 
 @dataclass
 class ChainInfo:
-    """Metadata for a single protein chain extracted from a PDB file."""
+    """Metadata for a single protein chain extracted from an mmCIF file."""
 
     chain_id: str
     sequence: str
     n_residues: int
 
 
-def parse_pdb_chains(pdb_path: Path) -> list[ChainInfo]:
-    """Extract protein chain sequences from a PDB file.
+def parse_cif_chains(cif_path: Path) -> list[ChainInfo]:
+    """Extract protein chain sequences from an mmCIF file.
 
-    Uses BioPython PDBParser with standard residue filtering.
+    Uses BioPython MMCIFParser with standard residue filtering.
     Returns only protein chains (standard amino acids).
     Skips HETATM, water, and non-standard residues.
 
     Args:
-        pdb_path: Path to a PDB file.
+        cif_path: Path to an mmCIF (.cif) file.
 
     Returns:
         List of ChainInfo for each protein chain found.
@@ -33,8 +33,8 @@ def parse_pdb_chains(pdb_path: Path) -> list[ChainInfo]:
     Raises:
         ValueError: If no protein chains are found in the file.
     """
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure("structure", str(pdb_path))
+    parser = MMCIFParser(QUIET=True)
+    structure = parser.get_structure("structure", str(cif_path))
     model = structure[0]
 
     chains: list[ChainInfo] = []
@@ -61,7 +61,7 @@ def parse_pdb_chains(pdb_path: Path) -> list[ChainInfo]:
             )
 
     if not chains:
-        raise ValueError(f"No protein chains found in {pdb_path}")
+        raise ValueError(f"No protein chains found in {cif_path}")
 
     return chains
 
