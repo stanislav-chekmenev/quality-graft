@@ -11,7 +11,7 @@ import torch
 import yaml
 
 from quality_graft.data.plddt_utils import NUM_PLDDT_BINS, bin_to_plddt, plddt_to_bin
-from quality_graft.data.pdb_utils import ChainInfo, chains_to_boltz_yaml, parse_pdb_chains
+from quality_graft.data.cif_utils import ChainInfo, chains_to_boltz_yaml, parse_cif_chains
 from quality_graft.data.boltz_runner import (
     BoltzResult,
     build_boltz_command,
@@ -61,30 +61,52 @@ class TestPlddtBinning:
         assert (bins == 0).all()
 
 
-# ── Phase A: PDB Parsing ────────────────────────────────────────────────────
+# ── Phase A: CIF Parsing ───────────────────────────────────────────────────
 
 
-class TestPdbParsing:
+class TestCifParsing:
     def test_parse_1ubq(self):
-        pdb_path = PROJECT_ROOT / "data" / "1ubq.pdb"
-        if not pdb_path.exists():
-            pytest.skip("data/1ubq.pdb not found")
-        chains = parse_pdb_chains(pdb_path)
+        cif_path = PROJECT_ROOT / "data" / "1ubq.cif"
+        if not cif_path.exists():
+            pytest.skip("data/1ubq.cif not found")
+        chains = parse_cif_chains(cif_path)
         assert len(chains) == 1
         assert chains[0].chain_id == "A"
         assert chains[0].n_residues == 76
         assert chains[0].sequence.startswith("MQIFVKTLTG")
 
     def test_no_protein_chains_raises(self, tmp_path):
-        pdb_content = (
-            "HETATM    1  O   HOH A   1"
-            "       0.000   0.000   0.000  1.00  0.00           O\n"
-            "END\n"
+        cif_content = (
+            "data_empty\n"
+            "_entry.id empty\n"
+            "loop_\n"
+            "_atom_site.group_PDB\n"
+            "_atom_site.id\n"
+            "_atom_site.type_symbol\n"
+            "_atom_site.label_atom_id\n"
+            "_atom_site.label_alt_id\n"
+            "_atom_site.label_comp_id\n"
+            "_atom_site.label_asym_id\n"
+            "_atom_site.label_entity_id\n"
+            "_atom_site.label_seq_id\n"
+            "_atom_site.pdbx_PDB_ins_code\n"
+            "_atom_site.Cartn_x\n"
+            "_atom_site.Cartn_y\n"
+            "_atom_site.Cartn_z\n"
+            "_atom_site.occupancy\n"
+            "_atom_site.B_iso_or_equiv\n"
+            "_atom_site.pdbx_formal_charge\n"
+            "_atom_site.auth_seq_id\n"
+            "_atom_site.auth_comp_id\n"
+            "_atom_site.auth_asym_id\n"
+            "_atom_site.auth_atom_id\n"
+            "_atom_site.pdbx_PDB_model_num\n"
+            "HETATM 1 O O . HOH A 1 1 ? 0.000 0.000 0.000 1.00 0.00 ? 1 HOH A O 1\n"
         )
-        pdb_file = tmp_path / "empty.pdb"
-        pdb_file.write_text(pdb_content)
+        cif_file = tmp_path / "empty.cif"
+        cif_file.write_text(cif_content)
         with pytest.raises(ValueError, match="No protein chains found"):
-            parse_pdb_chains(pdb_file)
+            parse_cif_chains(cif_file)
 
     def test_yaml_generation(self):
         chains = [
@@ -224,21 +246,21 @@ class TestBoltzRunner:
 
     def test_boltz_result_dataclass(self):
         result = BoltzResult(
-            pdb_id="1ubq",
+            structure_id="1ubq",
             plddt=np.array([0.5, 0.6]),
             confidence_json={"plddt": 0.55},
             success=True,
             error_msg=None,
         )
         assert result.success
-        assert result.pdb_id == "1ubq"
+        assert result.structure_id == "1ubq"
         assert result.plddt is not None
         assert len(result.plddt) == 2
         assert result.error_msg is None
 
     def test_boltz_result_failure(self):
         result = BoltzResult(
-            pdb_id="bad",
+            structure_id="bad",
             plddt=None,
             confidence_json=None,
             success=False,
@@ -286,7 +308,7 @@ class TestWandbLogger:
     def test_protein_metrics_computation(self):
         plddt = np.array([0.95, 0.85, 0.45, 0.30, 0.72])
         metrics = compute_protein_metrics("test", plddt, 5, 1.0)
-        assert metrics["protein/pdb_id"] == "test"
+        assert metrics["protein/structure_id"] == "test"
         assert metrics["protein/length"] == 5
         assert abs(metrics["protein/mean_plddt"] - 0.654) < 1e-6
         assert metrics["protein/frac_ge90"] == pytest.approx(0.2)

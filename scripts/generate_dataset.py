@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""Generate pLDDT label dataset by running Boltz predictions on PDB files.
+"""Generate pLDDT label dataset by running Boltz predictions on CIF files.
 
 Usage:
-    python scripts/generate_dataset.py --input-dir data/raw/pdbs/ --no-wandb
-    python scripts/generate_dataset.py --single-pdb data/raw/pdbs/1abc.pdb --no-wandb
-    python scripts/generate_dataset.py --input-dir data/raw/pdbs/ --wandb-project quality-graft
+    python scripts/generate_dataset.py --input-dir data/raw/structures/ --no-wandb
+    python scripts/generate_dataset.py --single-cif data/raw/structures/1abc.cif --no-wandb
+    python scripts/generate_dataset.py --input-dir data/raw/structures/ --wandb-project quality-graft
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import numpy as np
 import torch
 
 from quality_graft.data.boltz_runner import run_boltz_predict
-from quality_graft.data.pdb_utils import ChainInfo, chains_to_boltz_yaml, parse_pdb_chains
+from quality_graft.data.cif_utils import ChainInfo, chains_to_boltz_yaml, parse_cif_chains
 from quality_graft.data.plddt_utils import plddt_to_bin
 from quality_graft.data.wandb_logger import (
     finish_wandb_run,
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Generate pLDDT label dataset from PDB files using Boltz predictions.",
+        description="Generate pLDDT label dataset from CIF files using Boltz predictions.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
         "--input-dir",
         type=Path,
         default=None,
-        help="Path to directory with PDB files.",
+        help="Path to directory with CIF files.",
     )
     parser.add_argument(
         "--output-dir",
@@ -85,10 +85,10 @@ def parse_args() -> argparse.Namespace:
         "--override", action="store_true", help="Reprocess existing outputs."
     )
     parser.add_argument(
-        "--single-pdb",
+        "--single-cif",
         type=Path,
         default=None,
-        help="Process a single PDB file path (for testing).",
+        help="Process a single CIF file path (for testing).",
     )
 
     # W&B options
@@ -111,11 +111,11 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
 
     # Validation
-    if args.input_dir is None and args.single_pdb is None:
-        parser.error("Either --input-dir or --single-pdb must be provided.")
+    if args.input_dir is None and args.single_cif is None:
+        parser.error("Either --input-dir or --single-cif must be provided.")
 
-    if args.single_pdb is not None and not args.single_pdb.is_file():
-        parser.error(f"--single-pdb file does not exist: {args.single_pdb}")
+    if args.single_cif is not None and not args.single_cif.is_file():
+        parser.error(f"--single-cif file does not exist: {args.single_cif}")
 
     if args.input_dir is not None and not args.input_dir.is_dir():
         parser.error(f"--input-dir does not exist: {args.input_dir}")
@@ -123,30 +123,30 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def collect_pdb_files(args: argparse.Namespace) -> list[Path]:
-    """Collect PDB files from --input-dir or --single-pdb.
+def collect_cif_files(args: argparse.Namespace) -> list[Path]:
+    """Collect CIF files from --input-dir or --single-cif.
 
     Returns:
-        Sorted list of PDB file paths.
+        Sorted list of CIF file paths.
     """
-    if args.single_pdb is not None:
-        return [args.single_pdb]
+    if args.single_cif is not None:
+        return [args.single_cif]
 
-    pdb_files = sorted(args.input_dir.glob("*.pdb"))
-    if not pdb_files:
-        logger.warning("No .pdb files found in %s", args.input_dir)
-    return pdb_files
+    cif_files = sorted(args.input_dir.glob("*.cif"))
+    if not cif_files:
+        logger.warning("No .cif files found in %s", args.input_dir)
+    return cif_files
 
 
-def append_failure(failures_log: Path, pdb_id: str, error: str) -> None:
+def append_failure(failures_log: Path, structure_id: str, error: str) -> None:
     """Append a failure entry to the failures log file."""
     timestamp = datetime.datetime.now().isoformat()
     with open(failures_log, "a") as f:
-        f.write(f"{timestamp}\t{pdb_id}\t{error}\n")
+        f.write(f"{timestamp}\t{structure_id}\t{error}\n")
 
 
-def process_single_pdb(
-    pdb_path: Path,
+def process_single_structure(
+    cif_path: Path,
     args: argparse.Namespace,
     output_dir: Path,
     work_dir: Path,
@@ -156,55 +156,55 @@ def process_single_pdb(
     n_failed: int,
     n_skipped: int,
 ) -> tuple[dict | None, int, int, int]:
-    """Process a single PDB file through the full pipeline.
+    """Process a single CIF file through the full pipeline.
 
     Args:
-        pdb_path: Path to the PDB file.
+        cif_path: Path to the CIF file.
         args: Parsed CLI arguments.
         output_dir: Directory for .pt output files.
         work_dir: Boltz working directory.
         inputs_dir: Directory for Boltz input YAML files.
         failures_log: Path to failures log file.
-        n_processed: Current count of successfully processed PDBs.
-        n_failed: Current count of failed PDBs.
-        n_skipped: Current count of skipped PDBs.
+        n_processed: Current count of successfully processed structures.
+        n_failed: Current count of failed structures.
+        n_skipped: Current count of skipped structures.
 
     Returns:
         Tuple of (metrics_dict_or_None, n_processed, n_failed, n_skipped).
     """
-    pdb_id = pdb_path.stem
-    output_path = output_dir / f"{pdb_id}.pt"
+    structure_id = cif_path.stem
+    output_path = output_dir / f"{structure_id}.pt"
 
     # Check if already processed
     if output_path.exists() and not args.override:
-        logger.info("[%s] Output already exists, skipping.", pdb_id)
+        logger.info("[%s] Output already exists, skipping.", structure_id)
         n_skipped += 1
         return None, n_processed, n_failed, n_skipped
 
-    # Step 1: Parse PDB chains
+    # Step 1: Parse CIF chains
     try:
-        chains: list[ChainInfo] = parse_pdb_chains(pdb_path)
+        chains: list[ChainInfo] = parse_cif_chains(cif_path)
     except ValueError as e:
-        logger.warning("[%s] No protein chains found: %s", pdb_id, e)
+        logger.warning("[%s] No protein chains found: %s", structure_id, e)
         n_skipped += 1
         return None, n_processed, n_failed, n_skipped
     except Exception as e:
-        logger.warning("[%s] PDB parse failure: %s", pdb_id, e)
-        append_failure(failures_log, pdb_id, f"PDB parse failure: {e}")
+        logger.warning("[%s] CIF parse failure: %s", structure_id, e)
+        append_failure(failures_log, structure_id, f"CIF parse failure: {e}")
         n_failed += 1
         return None, n_processed, n_failed, n_skipped
 
     total_residues = sum(c.n_residues for c in chains)
     logger.info(
         "[%s] Parsed %d chain(s), %d total residues.",
-        pdb_id,
+        structure_id,
         len(chains),
         total_residues,
     )
 
     # Step 2: Generate Boltz YAML
     yaml_content = chains_to_boltz_yaml(chains, use_msa=args.use_msa_server)
-    yaml_path = inputs_dir / f"{pdb_id}.yaml"
+    yaml_path = inputs_dir / f"{structure_id}.yaml"
     yaml_path.write_text(yaml_content)
 
     # Step 3: Run Boltz prediction
@@ -224,14 +224,14 @@ def process_single_pdb(
     elapsed_s = time.time() - t_start
 
     if not result.success:
-        logger.error("[%s] Boltz prediction failed: %s", pdb_id, result.error_msg)
-        append_failure(failures_log, pdb_id, f"Boltz failure: {result.error_msg}")
+        logger.error("[%s] Boltz prediction failed: %s", structure_id, result.error_msg)
+        append_failure(failures_log, structure_id, f"Boltz failure: {result.error_msg}")
         n_failed += 1
         return None, n_processed, n_failed, n_skipped
 
     if result.plddt is None:
-        logger.error("[%s] Boltz returned no pLDDT data.", pdb_id)
-        append_failure(failures_log, pdb_id, "Missing pLDDT data")
+        logger.error("[%s] Boltz returned no pLDDT data.", structure_id)
+        append_failure(failures_log, structure_id, "Missing pLDDT data")
         n_failed += 1
         return None, n_processed, n_failed, n_skipped
 
@@ -240,7 +240,7 @@ def process_single_pdb(
     if plddt_np.shape[0] != total_residues:
         logger.warning(
             "[%s] pLDDT shape mismatch: got %d, expected %d residues. Saving anyway.",
-            pdb_id,
+            structure_id,
             plddt_np.shape[0],
             total_residues,
         )
@@ -254,7 +254,7 @@ def process_single_pdb(
     chain_lengths = {c.chain_id: c.n_residues for c in chains}
 
     label_data = {
-        "pdb_id": pdb_id,
+        "structure_id": structure_id,
         "sequences": sequences,
         "plddt": plddt_tensor,
         "plddt_bin": plddt_bin_tensor,
@@ -266,7 +266,7 @@ def process_single_pdb(
 
     logger.info(
         "[%s] Saved %s (pLDDT mean=%.3f, %d residues, %.1fs).",
-        pdb_id,
+        structure_id,
         output_path,
         float(plddt_tensor.mean()),
         plddt_np.shape[0],
@@ -275,7 +275,7 @@ def process_single_pdb(
 
     # Step 7: Log metrics to W&B
     metrics = log_protein_metrics(
-        pdb_id=pdb_id,
+        structure_id=structure_id,
         plddt=plddt_np,
         n_residues=total_residues,
         elapsed_s=elapsed_s,
@@ -311,9 +311,9 @@ def main() -> None:
     # Initialize W&B
     init_wandb_run(args)
 
-    # Collect PDB files
-    pdb_files = collect_pdb_files(args)
-    logger.info("Found %d PDB file(s) to process.", len(pdb_files))
+    # Collect CIF files
+    cif_files = collect_cif_files(args)
+    logger.info("Found %d CIF file(s) to process.", len(cif_files))
 
     # Processing loop
     n_processed = 0
@@ -321,15 +321,15 @@ def main() -> None:
     n_skipped = 0
     protein_stats: list[dict] = []
 
-    for i, pdb_path in enumerate(pdb_files):
-        pdb_id = pdb_path.stem
+    for i, cif_path in enumerate(cif_files):
+        structure_id = cif_path.stem
         logger.info(
-            "Processing [%d/%d]: %s", i + 1, len(pdb_files), pdb_id
+            "Processing [%d/%d]: %s", i + 1, len(cif_files), structure_id
         )
 
         try:
-            metrics, n_processed, n_failed, n_skipped = process_single_pdb(
-                pdb_path=pdb_path,
+            metrics, n_processed, n_failed, n_skipped = process_single_structure(
+                cif_path=cif_path,
                 args=args,
                 output_dir=output_dir,
                 work_dir=work_dir,
@@ -342,8 +342,8 @@ def main() -> None:
             if metrics is not None:
                 protein_stats.append(metrics)
         except Exception as e:
-            logger.error("[%s] Unexpected error: %s", pdb_id, e, exc_info=True)
-            append_failure(failures_log, pdb_id, f"Unexpected error: {e}")
+            logger.error("[%s] Unexpected error: %s", structure_id, e, exc_info=True)
+            append_failure(failures_log, structure_id, f"Unexpected error: {e}")
             n_failed += 1
 
     # Summary
@@ -355,12 +355,12 @@ def main() -> None:
         n_processed,
         n_failed,
         n_skipped,
-        len(pdb_files),
+        len(cif_files),
     )
     print(f"\n{'='*60}")
     print(f"Dataset Generation Summary")
     print(f"{'='*60}")
-    print(f"  Total PDB files:  {len(pdb_files)}")
+    print(f"  Total CIF files:  {len(cif_files)}")
     print(f"  Processed:        {n_processed}")
     print(f"  Failed:           {n_failed}")
     print(f"  Skipped:          {n_skipped}")

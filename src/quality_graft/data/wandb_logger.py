@@ -46,7 +46,7 @@ def count_segments_below(plddt: np.ndarray, threshold: float) -> int:
 # ---------------------------------------------------------------------------
 
 def compute_protein_metrics(
-    pdb_id: str,
+    structure_id: str,
     plddt: np.ndarray,
     n_residues: int,
     elapsed_s: float,
@@ -54,7 +54,7 @@ def compute_protein_metrics(
     """Compute all per-protein metrics from a pLDDT array.
 
     Returns a dict with keys matching the ``wandb.log`` format:
-        protein/pdb_id, protein/length, protein/mean_plddt, protein/median_plddt,
+        protein/structure_id, protein/length, protein/mean_plddt, protein/median_plddt,
         protein/p10_plddt, protein/p25_plddt, protein/std_plddt, protein/iqr_plddt,
         protein/frac_ge90, protein/frac_ge70, protein/frac_lt50,
         protein/L70, protein/L70_frac,
@@ -63,7 +63,7 @@ def compute_protein_metrics(
         protein/boltz_walltime_s.
     """
     metrics: dict[str, Any] = {
-        "protein/pdb_id": pdb_id,
+        "protein/structure_id": structure_id,
         "protein/length": n_residues,
         "protein/mean_plddt": float(plddt.mean()),
         "protein/median_plddt": float(np.median(plddt)),
@@ -131,7 +131,7 @@ def init_wandb_run(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def log_protein_metrics(
-    pdb_id: str,
+    structure_id: str,
     plddt: np.ndarray,
     n_residues: int,
     elapsed_s: float,
@@ -144,7 +144,7 @@ def log_protein_metrics(
     Returns the metrics dict (useful for accumulating stats).
     Logs to W&B only if ``wandb.run is not None``.
     """
-    metrics = compute_protein_metrics(pdb_id, plddt, n_residues, elapsed_s)
+    metrics = compute_protein_metrics(structure_id, plddt, n_residues, elapsed_s)
     metrics["progress/n_processed"] = n_processed
     metrics["progress/n_failed"] = n_failed
     metrics["progress/n_skipped"] = n_skipped
@@ -508,7 +508,7 @@ def log_dataset_summary(protein_stats: list[dict]) -> None:
     # W&B Summary Table
     # ------------------------------------------------------------------
     columns = [
-        "pdb_id", "length", "mean_plddt", "median_plddt",
+        "structure_id", "length", "mean_plddt", "median_plddt",
         "p10_plddt", "p25_plddt", "std_plddt", "iqr_plddt",
         "f90", "f70", "f50", "L70", "L70_frac",
         "longest_low_seg", "num_low_segs",
@@ -518,7 +518,7 @@ def log_dataset_summary(protein_stats: list[dict]) -> None:
     rows = []
     for s in protein_stats:
         rows.append([
-            s["protein/pdb_id"], s["protein/length"],
+            s["protein/structure_id"], s["protein/length"],
             s["protein/mean_plddt"], s["protein/median_plddt"],
             s["protein/p10_plddt"], s["protein/p25_plddt"],
             s["protein/std_plddt"], s["protein/iqr_plddt"],

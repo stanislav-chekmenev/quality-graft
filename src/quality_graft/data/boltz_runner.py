@@ -38,7 +38,7 @@ def _clean_env_for_boltz() -> dict[str, str]:
 class BoltzResult:
     """Result of a single Boltz prediction run."""
 
-    pdb_id: str
+    structure_id: str
     plddt: np.ndarray | None  # [N_total] float, 0-1 scale
     confidence_json: dict | None  # Full confidence summary
     success: bool
@@ -103,27 +103,27 @@ def build_boltz_command(
     return cmd
 
 
-def _find_boltz_output(boltz_out_dir: Path, pdb_id: str, filename: str) -> Path | None:
+def _find_boltz_output(boltz_out_dir: Path, structure_id: str, filename: str) -> Path | None:
     """Locate a Boltz output file across known directory layouts.
 
     Boltz writes predictions to a nested directory structure that varies
     by version. This function checks three known layouts:
-      1. boltz_out_dir/predictions/{pdb_id}/{filename}
-      2. boltz_out_dir/{pdb_id}/predictions/{pdb_id}/{filename}
-      3. boltz_out_dir/boltz_results_{pdb_id}/predictions/{pdb_id}/{filename}
+      1. boltz_out_dir/predictions/{structure_id}/{filename}
+      2. boltz_out_dir/{structure_id}/predictions/{structure_id}/{filename}
+      3. boltz_out_dir/boltz_results_{structure_id}/predictions/{structure_id}/{filename}
 
     Args:
         boltz_out_dir: Root output directory passed to Boltz.
-        pdb_id: PDB identifier (stem of the input YAML).
+        structure_id: Structure identifier (stem of the input YAML).
         filename: Name of the file to locate.
 
     Returns:
         Path to the file, or None if not found.
     """
     candidates = [
-        boltz_out_dir / "predictions" / pdb_id / filename,
-        boltz_out_dir / pdb_id / "predictions" / pdb_id / filename,
-        boltz_out_dir / f"boltz_results_{pdb_id}" / "predictions" / pdb_id / filename,
+        boltz_out_dir / "predictions" / structure_id / filename,
+        boltz_out_dir / structure_id / "predictions" / structure_id / filename,
+        boltz_out_dir / f"boltz_results_{structure_id}" / "predictions" / structure_id / filename,
     ]
 
     for path in candidates:
@@ -133,31 +133,31 @@ def _find_boltz_output(boltz_out_dir: Path, pdb_id: str, filename: str) -> Path 
     return None
 
 
-def find_plddt_npz(boltz_out_dir: Path, pdb_id: str) -> Path | None:
+def find_plddt_npz(boltz_out_dir: Path, structure_id: str) -> Path | None:
     """Locate the pLDDT npz file in Boltz output directory.
 
     Args:
         boltz_out_dir: Root output directory passed to Boltz.
-        pdb_id: PDB identifier (stem of the input YAML).
+        structure_id: Structure identifier (stem of the input YAML).
 
     Returns:
         Path to the npz file, or None if not found.
     """
-    return _find_boltz_output(boltz_out_dir, pdb_id, f"plddt_{pdb_id}_model_0.npz")
+    return _find_boltz_output(boltz_out_dir, structure_id, f"plddt_{structure_id}_model_0.npz")
 
 
-def find_confidence_json(boltz_out_dir: Path, pdb_id: str) -> Path | None:
+def find_confidence_json(boltz_out_dir: Path, structure_id: str) -> Path | None:
     """Locate the confidence JSON file in Boltz output directory.
 
     Args:
         boltz_out_dir: Root output directory passed to Boltz.
-        pdb_id: PDB identifier (stem of the input YAML).
+        structure_id: Structure identifier (stem of the input YAML).
 
     Returns:
         Path to the JSON file, or None if not found.
     """
     return _find_boltz_output(
-        boltz_out_dir, pdb_id, f"confidence_{pdb_id}_model_0.json"
+        boltz_out_dir, structure_id, f"confidence_{structure_id}_model_0.json"
     )
 
 
@@ -176,7 +176,7 @@ def run_boltz_predict(
     """Run boltz predict as a subprocess and parse results.
 
     Args:
-        yaml_path: Path to the input YAML file. The stem is used as pdb_id.
+        yaml_path: Path to the input YAML file. The stem is used as structure_id.
         out_dir: Directory where Boltz writes prediction outputs.
         model: Model name (default: "boltz1").
         devices: Number of devices to use.
@@ -190,7 +190,7 @@ def run_boltz_predict(
     Returns:
         BoltzResult with pLDDT array on success, or error information on failure.
     """
-    pdb_id = yaml_path.stem
+    structure_id = yaml_path.stem
     cmd = build_boltz_command(
         yaml_path,
         out_dir,
@@ -218,7 +218,7 @@ def run_boltz_predict(
             )
             logger.error(error_msg)
             return BoltzResult(
-                pdb_id=pdb_id,
+                structure_id=structure_id,
                 plddt=None,
                 confidence_json=None,
                 success=False,
@@ -226,10 +226,10 @@ def run_boltz_predict(
             )
 
         # Find and load pLDDT
-        npz_path = find_plddt_npz(out_dir, pdb_id)
+        npz_path = find_plddt_npz(out_dir, structure_id)
         if npz_path is None:
             return BoltzResult(
-                pdb_id=pdb_id,
+                structure_id=structure_id,
                 plddt=None,
                 confidence_json=None,
                 success=False,
@@ -240,7 +240,7 @@ def run_boltz_predict(
 
         # Try to load confidence JSON
         conf_json = None
-        json_path = find_confidence_json(out_dir, pdb_id)
+        json_path = find_confidence_json(out_dir, structure_id)
         if json_path is not None:
             with open(json_path) as f:
                 conf_json = json.load(f)
