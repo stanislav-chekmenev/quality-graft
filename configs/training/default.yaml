@@ -1,2 +1,23 @@
 # Training configuration
-# TODO: Populate when implementing the training loop (task 13)
+optimizer:
+  lr: 1.0e-4
+  weight_decay: 1.0e-2
+  betas: [0.9, 0.999]
+
+scheduler:
+  type: linear
+  warmup_steps: 500
+  min_lr: 1.0e-6
+
+max_length: 128
+batch_size: 4
+num_workers: 4
+precision: bf16
+max_epochs: 50
+gradient_clip_val: 1.0
+accumulate_grad_batches: 1
+
+wandb:
+  project: quality-graft
+  entity: null
+  run_name: null
