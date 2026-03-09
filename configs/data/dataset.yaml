@@ -6,6 +6,7 @@ molecule_type: protein
 oligomeric_min: 1
 oligomeric_max: 1
 format: cif
+local_only: false
 num_plddt_bins: 50
 batch_size: ${training.batch_size}
 num_workers: ${training.num_workers}

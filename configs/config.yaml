@@ -9,3 +9,5 @@ defaults:
   - data/preprocessing
   - training/default
   - _self_
+
+mode: train

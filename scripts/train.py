@@ -3,25 +3,23 @@
 
 Usage:
     # Preprocess only (downloads, PyG conversion, Boltz-1 pLDDT labels)
-    python scripts/train.py --mode=preprocess
+    python scripts/train.py mode=preprocess
 
     # Train (assumes preprocessing is done)
-    python scripts/train.py --mode=train
+    python scripts/train.py mode=train
 
     # Override config values
-    python scripts/train.py --mode=train training.max_epochs=10 training.batch_size=2
+    python scripts/train.py mode=train training.max_epochs=10 training.batch_size=2
 """
 
 from __future__ import annotations
 
-import argparse
 import logging
 import sys
 from pathlib import Path
 
 import hydra
 import lightning as L
-import torch
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
@@ -39,7 +37,6 @@ from la_proteina.proteinfoundation.datasets.pdb_data import (
     PDBDataSplitter,
 )
 from quality_graft.data.datamodule import QualityGraftDataModule
-from quality_graft.models.adaptor import AdaptorModule
 from quality_graft.models.confidence_head import BoltzConfidenceHead
 from quality_graft.models.la_proteina_wrapper import LaProteinaWrapper
 from quality_graft.models.quality_graft import QualityGraft
@@ -50,16 +47,19 @@ logger = logging.getLogger(__name__)
 
 def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
     """Build the data module from Hydra config."""
-    data_cfg = cfg.data.dataset
+    data_cfg = cfg.data
 
-    dataselector = PDBDataSelector(
-        data_dir=data_cfg.data_dir,
-        max_length=data_cfg.max_length,
-        min_length=data_cfg.min_length,
-        molecule_type=data_cfg.molecule_type,
-        oligomeric_min=data_cfg.oligomeric_min,
-        oligomeric_max=data_cfg.oligomeric_max,
-    )
+    if data_cfg.get("local_only", False):
+        dataselector = None
+    else:
+        dataselector = PDBDataSelector(
+            data_dir=data_cfg.data_dir,
+            max_length=data_cfg.max_length,
+            min_length=data_cfg.min_length,
+            molecule_type=data_cfg.molecule_type,
+            oligomeric_min=data_cfg.oligomeric_min,
+            oligomeric_max=data_cfg.oligomeric_max,
+        )
     datasplitter = PDBDataSplitter(data_dir=data_cfg.data_dir)
 
     boltz_config = OmegaConf.to_container(data_cfg.boltz, resolve=True)
@@ -92,10 +92,10 @@ def build_model(cfg: DictConfig) -> QualityGraft:
     )
 
     # Adaptor (via Hydra instantiate)
-    adaptor = hydra.utils.instantiate(model_cfg.quality_graft.adaptor)
+    adaptor = hydra.utils.instantiate(model_cfg.adaptor)
 
     # Confidence head
-    ch_cfg = model_cfg.quality_graft.confidence_head
+    ch_cfg = model_cfg.confidence_head
     confidence_head = BoltzConfidenceHead(
         token_s=ch_cfg.token_s,
         token_z=ch_cfg.token_z,
@@ -128,7 +128,7 @@ def build_lightning_module(cfg: DictConfig, model: QualityGraft) -> QualityGraft
         betas=tuple(train_cfg.optimizer.betas),
         warmup_steps=train_cfg.scheduler.warmup_steps,
         min_lr=train_cfg.scheduler.min_lr,
-        num_plddt_bins=cfg.data.dataset.num_plddt_bins,
+        num_plddt_bins=cfg.data.num_plddt_bins,
     )
 
 
@@ -171,12 +171,7 @@ def main(cfg: DictConfig) -> None:
     """Main entry point."""
     logging.basicConfig(level=logging.INFO)
 
-    # Parse mode from sys.argv (before Hydra consumes args)
-    mode = "train"
-    for arg in sys.argv[1:]:
-        if arg.startswith("--mode="):
-            mode = arg.split("=")[1]
-            break
+    mode = cfg.get("mode", "train")
 
     logger.info("Mode: %s", mode)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg))
@@ -188,7 +183,6 @@ def main(cfg: DictConfig) -> None:
 
     elif mode == "train":
         dm = build_data_module(cfg)
-        dm.setup("fit")
 
         model = build_model(cfg)
         lit_module = build_lightning_module(cfg, model)

@@ -246,7 +246,7 @@ def run_boltz_predict(
                 conf_json = json.load(f)
 
         return BoltzResult(
-            pdb_id=pdb_id,
+            structure_id=structure_id,
             plddt=plddt,
             confidence_json=conf_json,
             success=True,
@@ -255,7 +255,7 @@ def run_boltz_predict(
 
     except Exception as e:
         return BoltzResult(
-            pdb_id=pdb_id,
+            structure_id=structure_id,
             plddt=None,
             confidence_json=None,
             success=False,

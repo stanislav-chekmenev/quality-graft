@@ -12,6 +12,9 @@ ckpt/
 # Logging
 wandb
 
+# Outputs
+outputs
+
 # Data (top-level only, not src/boltz/data/)
 /data/
 
