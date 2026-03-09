@@ -1,2 +1,2 @@
-# Preprocessing configuration
-# TODO: Populate when implementing the data pipeline (task 11)
+# Preprocessing is handled by QualityGraftDataModule.prepare_data()
+# See configs/data/dataset.yaml for data module configuration.
