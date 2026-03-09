@@ -36,13 +36,26 @@ from la_proteina.proteinfoundation.datasets.pdb_data import (
     PDBDataSelector,
     PDBDataSplitter,
 )
+import la_proteina.proteinfoundation.datasets.transforms as lp_transforms
 from quality_graft.data.datamodule import QualityGraftDataModule
+
 from quality_graft.models.confidence_head import BoltzConfidenceHead
 from quality_graft.models.la_proteina_wrapper import LaProteinaWrapper
 from quality_graft.models.quality_graft import QualityGraft
 from quality_graft.training.lightning_module import QualityGraftLightningModule
 
 logger = logging.getLogger(__name__)
+
+
+class TransformWrapper:
+    """Wraps La-Proteina transforms whose __call__ is incompatible with
+    newer PyG BaseTransform (which requires a forward() method)."""
+
+    def __init__(self, transform_cls):
+        self._call = transform_cls.__call__
+
+    def __call__(self, data):
+        return self._call(None, data)
 
 
 def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
@@ -60,9 +73,17 @@ def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
             oligomeric_min=data_cfg.oligomeric_min,
             oligomeric_max=data_cfg.oligomeric_max,
         )
-    datasplitter = PDBDataSplitter(data_dir=data_cfg.data_dir)
+    datasplitter = PDBDataSplitter(
+        data_dir=data_cfg.data_dir,
+        train_val_test=list(data_cfg.train_val_test),
+    )
 
     boltz_config = OmegaConf.to_container(data_cfg.boltz, resolve=True)
+
+    transforms = [
+        TransformWrapper(lp_transforms.CoordsToNanometers),
+        TransformWrapper(lp_transforms.CenterStructureTransform),
+    ]
 
     return QualityGraftDataModule(
         data_dir=data_cfg.data_dir,
@@ -73,6 +94,7 @@ def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
         num_plddt_bins=data_cfg.num_plddt_bins,
         batch_size=data_cfg.batch_size,
         num_workers=data_cfg.num_workers,
+        transforms=transforms,
     )
 
 
@@ -159,8 +181,11 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
     return L.Trainer(
         max_epochs=train_cfg.max_epochs,
         precision=train_cfg.precision,
+        accelerator=train_cfg.get("accelerator", "auto"),
         gradient_clip_val=train_cfg.gradient_clip_val,
         accumulate_grad_batches=train_cfg.accumulate_grad_batches,
+        log_every_n_steps=train_cfg.get("log_every_n_steps", 50),
+        limit_val_batches=train_cfg.get("limit_val_batches", 1.0),
         logger=wandb_logger,
         callbacks=callbacks,
     )

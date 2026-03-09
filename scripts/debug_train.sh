@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Debug training run: 2 epochs on 1 preprocessed structure (1ubq) on GPU.
+# Debug training run: 2 epochs on 1 preprocessed structure (1ubq) on CPU.
 # Assumes debug_preprocess.sh has already been run.
 set -euo pipefail
 
@@ -17,10 +17,13 @@ python "$PROJECT_ROOT/scripts/train.py" \
     data.data_dir="$DEBUG_DIR" \
     data.local_only=true \
     data.num_workers=0 \
+    data.train_val_test="[1.0, 0.0, 0.0]" \
     training.batch_size=1 \
     training.num_workers=0 \
     training.max_length=128 \
-    training.max_epochs=2 \
+    training.max_epochs=10 \
     training.precision=32 \
+    training.accelerator=cpu \
+    training.scheduler.warmup_steps=0 \
     model.la_proteina_wrapper.device=cpu \
     model.confidence_head.device=cpu

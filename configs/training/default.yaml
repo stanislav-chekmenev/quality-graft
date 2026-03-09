@@ -16,6 +16,9 @@ precision: bf16
 max_epochs: 50
 gradient_clip_val: 1.0
 accumulate_grad_batches: 1
+accelerator: auto
+log_every_n_steps: 1
+limit_val_batches: 0.
 
 wandb:
   project: quality-graft

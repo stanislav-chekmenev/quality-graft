@@ -8,6 +8,7 @@ oligomeric_max: 1
 format: cif
 local_only: false
 num_plddt_bins: 50
+train_val_test: [0.8, 0.15, 0.05]
 batch_size: ${training.batch_size}
 num_workers: ${training.num_workers}
 

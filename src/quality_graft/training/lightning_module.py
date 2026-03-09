@@ -86,7 +86,7 @@ class QualityGraftLightningModule(L.LightningModule):
         if mask.dtype == torch.bool:
             mask = mask.float()
         loss = self._compute_loss(outputs["plddt_logits"], batch["plddt_bin"], mask)
-        self.log("train/loss", loss, prog_bar=True, sync_dist=True)
+        self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):

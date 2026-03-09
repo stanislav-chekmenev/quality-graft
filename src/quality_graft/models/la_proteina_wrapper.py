@@ -178,7 +178,7 @@ class LaProteinaWrapper(nn.Module):
         proteina_ckpt_path: str,
         device: str,
         use_decoder: bool = False,
-        t_value: float = 1.0,
+        t_value: float = 0.99,
         deterministic_encode: bool = False,
         autoencoder_ckpt_path: Optional[str] = None,
     ) -> "LaProteinaWrapper":
