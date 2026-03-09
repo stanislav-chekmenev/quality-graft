@@ -8,7 +8,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEBUG_DIR="$PROJECT_ROOT/data/debug"
 
 # --- Environment ---
-eval "$(micromamba shell hook --shell bash)" && micromamba activate quality_graft_env
+#eval "$(micromamba shell hook --shell bash)" && micromamba activate quality_graft_env
 export PYTHONPATH="${PYTHONPATH:-}:$PROJECT_ROOT:$PROJECT_ROOT/src"
 
 # --- Run training ---
@@ -21,9 +21,9 @@ python "$PROJECT_ROOT/scripts/train.py" \
     training.batch_size=1 \
     training.num_workers=0 \
     training.max_length=128 \
-    training.max_epochs=10 \
-    training.precision=32 \
-    training.accelerator=cpu \
+    training.max_epochs=2000 \
+    training.precision=bf16 \
+    training.accelerator=cuda \
     training.scheduler.warmup_steps=0 \
-    model.la_proteina_wrapper.device=cpu \
-    model.confidence_head.device=cpu
+    model.la_proteina_wrapper.device=cuda \
+    model.confidence_head.device=cuda
