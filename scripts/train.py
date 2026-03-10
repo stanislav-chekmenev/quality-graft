@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import hydra
@@ -167,8 +168,10 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
     )
 
     # Callbacks
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     callbacks = [
         ModelCheckpoint(
+            dirpath=f"{train_cfg.checkpoint_dir}/{run_timestamp}",
             monitor="val/loss",
             mode="min",
             save_top_k=3,
