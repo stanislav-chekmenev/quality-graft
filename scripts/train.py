@@ -210,18 +210,20 @@ def main(cfg: DictConfig) -> None:
     if mode == "preprocess":
         # Init W&B run for preprocessing
         wandb_cfg = cfg.training.wandb
-        try:
-            import wandb
 
-            wandb.init(
-                project=wandb_cfg.project,
-                entity=wandb_cfg.entity,
-                name=wandb_cfg.run_name,
-                job_type="preprocessing",
-                config=OmegaConf.to_container(cfg, resolve=True),
-            )
-        except Exception as e:
-            logger.warning("W&B init failed, continuing without logging: %s", e)
+        if wandb_cfg.get("log_preprocess", False):
+            try:
+                import wandb
+
+                wandb.init(
+                    project=wandb_cfg.project,
+                    entity=wandb_cfg.entity,
+                    name=wandb_cfg.run_name,
+                    job_type="preprocessing",
+                    config=OmegaConf.to_container(cfg, resolve=True),
+                )
+            except Exception as e:
+                logger.warning("W&B init failed, continuing without logging: %s", e)
 
         dm = build_data_module(cfg)
         dm.prepare_data()

@@ -29,3 +29,4 @@ wandb:
   project: quality-graft
   entity: null
   run_name: null
+  log_preprocess: true

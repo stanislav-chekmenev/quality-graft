@@ -7,15 +7,14 @@ Runs `boltz predict` as a subprocess and parses the output files
 from __future__ import annotations
 
 import json
-import logging
 import os
 import subprocess
 from dataclasses import dataclass
+from loguru import logger
 from pathlib import Path
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
 
 
 def _clean_env_for_boltz() -> dict[str, str]:
@@ -204,7 +203,7 @@ def run_boltz_predict(
         override,
     )
 
-    logger.info("Running Boltz: %s", " ".join(cmd))
+    logger.info("Running Boltz: {}", " ".join(cmd))
 
     try:
         env = _clean_env_for_boltz()
