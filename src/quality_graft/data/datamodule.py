@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -25,6 +26,7 @@ from src.la_proteina.proteinfoundation.utils.dense_padding_data_loader import De
 from quality_graft.data.boltz_runner import run_boltz_predict
 from quality_graft.data.cif_utils import parse_cif_chains, chains_to_boltz_yaml
 from quality_graft.data.plddt_utils import plddt_to_bin
+from quality_graft.data.wandb_logger import log_protein_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +120,9 @@ class QualityGraftDataModule(PDBLightningDataModule):
             structure_id = fname.replace(".pt", "")
             pdb_code = structure_id.split("_")[0]
 
+            t0 = time.time()
             plddt_np = self._run_boltz_for_structure(structure_id, pdb_code)
+            elapsed_s = time.time() - t0
 
             if plddt_np is None:
                 n_failed += 1
@@ -143,6 +147,17 @@ class QualityGraftDataModule(PDBLightningDataModule):
             logger.info(
                 "[%s] pLDDT saved (mean=%.3f, %d residues).",
                 structure_id, graph.plddt.mean().item(), n_residues,
+            )
+
+            # Log per-protein metrics to W&B (no-op if wandb.run is None)
+            log_protein_metrics(
+                structure_id=structure_id,
+                plddt=plddt_np,
+                n_residues=n_residues,
+                elapsed_s=elapsed_s,
+                n_processed=n_processed,
+                n_failed=n_failed,
+                n_skipped=n_skipped,
             )
 
         logger.info(

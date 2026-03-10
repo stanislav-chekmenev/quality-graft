@@ -39,6 +39,7 @@ from la_proteina.proteinfoundation.datasets.pdb_data import (
 )
 import la_proteina.proteinfoundation.datasets.transforms as lp_transforms
 from quality_graft.data.datamodule import QualityGraftDataModule
+from quality_graft.data.wandb_logger import collect_dataset_stats, log_dataset_summary
 
 from quality_graft.models.confidence_head import BoltzConfidenceHead
 from quality_graft.models.la_proteina_wrapper import LaProteinaWrapper
@@ -207,8 +208,42 @@ def main(cfg: DictConfig) -> None:
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg))
 
     if mode == "preprocess":
+        # Init W&B run for preprocessing
+        wandb_cfg = cfg.training.wandb
+        try:
+            import wandb
+
+            wandb.init(
+                project=wandb_cfg.project,
+                entity=wandb_cfg.entity,
+                name=wandb_cfg.run_name,
+                job_type="preprocessing",
+                config=OmegaConf.to_container(cfg, resolve=True),
+            )
+        except Exception as e:
+            logger.warning("W&B init failed, continuing without logging: %s", e)
+
         dm = build_data_module(cfg)
         dm.prepare_data()
+
+        # Log full dataset summary (all labeled structures)
+        try:
+            protein_stats = collect_dataset_stats(dm.processed_dir)
+            log_dataset_summary(protein_stats)
+            logger.info(
+                "Dataset summary logged: %d labeled structures.", len(protein_stats)
+            )
+        except Exception as e:
+            logger.warning("Dataset summary logging failed: %s", e)
+
+        try:
+            import wandb
+
+            if wandb.run is not None:
+                wandb.finish()
+        except Exception:
+            pass
+
         logger.info("Preprocessing complete.")
 
     elif mode == "train":

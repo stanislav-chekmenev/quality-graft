@@ -4,8 +4,8 @@ All public functions are no-ops when W&B is not initialized
 (guard on ``wandb.run is not None``).
 """
 
-import argparse
 import logging
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -94,36 +94,48 @@ def compute_protein_metrics(
     return metrics
 
 
-# ---------------------------------------------------------------------------
-# W&B lifecycle
-# ---------------------------------------------------------------------------
+def collect_dataset_stats(processed_dir: Path) -> list[dict[str, Any]]:
+    """Scan all .pt files in processed_dir and collect metrics for those with pLDDT labels.
 
-def init_wandb_run(args: argparse.Namespace) -> None:
-    """Initialize a W&B run with config derived from CLI args.
+    Each labeled structure produces a metrics dict (from ``compute_protein_metrics``)
+    plus a ``_plddt_array`` key holding the raw numpy array (needed by
+    ``log_dataset_summary``).
 
-    No-op if ``args.no_wandb`` is ``True`` (or the attribute is missing).
+    Parameters
+    ----------
+    processed_dir : Path
+        Directory containing PyG ``.pt`` files with optional ``plddt`` attribute.
+
+    Returns
+    -------
+    list[dict]
+        One metrics dict per labeled structure.
     """
-    if getattr(args, "no_wandb", True):
-        return
+    import torch
 
-    import wandb
+    processed_dir = Path(processed_dir)
+    pt_files = sorted(processed_dir.glob("*.pt"))
+    protein_stats: list[dict[str, Any]] = []
 
-    wandb.init(
-        project=getattr(args, "wandb_project", "quality-graft"),
-        name=getattr(args, "wandb_run_name", None),
-        entity=getattr(args, "wandb_entity", None),
-        job_type="dataset-generation",
-        config={
-            "model": getattr(args, "model", "boltz1"),
-            "diffusion_samples": getattr(args, "diffusion_samples", 1),
-            "sampling_steps": getattr(args, "sampling_steps", 200),
-            "recycling_steps": getattr(args, "recycling_steps", 3),
-            "use_msa_server": getattr(args, "use_msa_server", False),
-            "num_plddt_bins": getattr(args, "num_bins", 50),
-            "accelerator": getattr(args, "accelerator", "gpu"),
-            "input_dir": str(getattr(args, "input_dir", "")),
-        },
-    )
+    for pt_path in pt_files:
+        graph = torch.load(pt_path, weights_only=False)
+        if not hasattr(graph, "plddt") or graph.plddt is None:
+            continue
+
+        structure_id = pt_path.stem
+        plddt_np = graph.plddt.numpy()
+        n_residues = plddt_np.shape[0]
+
+        metrics = compute_protein_metrics(
+            structure_id=structure_id,
+            plddt=plddt_np,
+            n_residues=n_residues,
+            elapsed_s=0.0,
+        )
+        metrics["_plddt_array"] = plddt_np
+        protein_stats.append(metrics)
+
+    return protein_stats
 
 
 # ---------------------------------------------------------------------------
@@ -530,14 +542,3 @@ def log_dataset_summary(protein_stats: list[dict]) -> None:
         ])
     table = wandb.Table(columns=columns, data=rows)
     wandb.log({"dataset/protein_table": table})
-
-
-def finish_wandb_run() -> None:
-    """Finalize W&B run. No-op if ``wandb.run is None``."""
-    try:
-        import wandb
-
-        if wandb.run is not None:
-            wandb.finish()
-    except ImportError:
-        pass

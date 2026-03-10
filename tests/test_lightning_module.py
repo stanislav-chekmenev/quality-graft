@@ -33,9 +33,22 @@ class _MockLaProteinaWrapper(nn.Module):
         }
 
 
+class _MockPairformerModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.ModuleList([nn.Identity()])
+
+
+class _MockConfidenceModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.pairformer_module = _MockPairformerModule()
+
+
 class _MockConfidenceHead(nn.Module):
     def __init__(self):
         super().__init__()
+        self.confidence_module = _MockConfidenceModule()
         self._s_to_plddt = nn.Linear(TARGET_S_DIM, 50, bias=False)
         self._s_to_resolved = nn.Linear(TARGET_S_DIM, 2, bias=False)
         self._z_to_pde = nn.Linear(TARGET_Z_DIM, 64, bias=False)
