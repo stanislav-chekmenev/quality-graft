@@ -152,6 +152,7 @@ def build_lightning_module(cfg: DictConfig, model: QualityGraft) -> QualityGraft
         warmup_steps=train_cfg.scheduler.warmup_steps,
         min_lr=train_cfg.scheduler.min_lr,
         num_plddt_bins=cfg.data.num_plddt_bins,
+        debug_mode=train_cfg.get("debug_mode", False),
     )
 
 
