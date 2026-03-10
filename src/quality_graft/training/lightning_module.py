@@ -80,6 +80,22 @@ class QualityGraftLightningModule(L.LightningModule):
         loss = loss.view_as(plddt_labels) * mask
         return loss.sum() / mask.sum().clamp(min=1)
 
+    def on_train_epoch_start(self):
+        """Keep frozen components in eval() after Lightning's model.train()."""
+        self.model.la_proteina.eval()
+        self.model.confidence_head.eval()
+        self.model.adaptor.train()
+
+    def on_train_batch_start(self, batch, batch_idx):
+        """Re-enforce eval() on frozen components after mid-epoch validation."""
+        if self.model.la_proteina.training:
+            self.model.la_proteina.eval()
+            self.model.confidence_head.eval()
+
+    def on_validation_epoch_start(self):
+        """Put entire model in eval() for validation."""
+        self.model.eval()
+
     def training_step(self, batch, batch_idx):
         outputs = self.model(batch)
         mask = batch["mask"]

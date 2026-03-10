@@ -21,6 +21,7 @@ import torch
 from la_proteina.proteinfoundation.datasets.pdb_data import (
     PDBLightningDataModule,
 )
+from proteinfoundation.utils.dense_padding_data_loader import DensePaddingDataLoader
 from quality_graft.data.boltz_runner import run_boltz_predict
 from quality_graft.data.cif_utils import parse_cif_chains, chains_to_boltz_yaml
 from quality_graft.data.plddt_utils import plddt_to_bin
@@ -57,6 +58,27 @@ class QualityGraftDataModule(PDBLightningDataModule):
         self.num_plddt_bins = num_plddt_bins
         self.boltz_work_dir = self.data_dir / "boltz_work"
         self.boltz_inputs_dir = self.boltz_work_dir / "inputs"
+
+    def setup(self, stage=None):
+        super().setup(stage)
+        if stage in ("fit", None):
+            if self.val_ds is not None and len(self.val_ds) == 0:
+                logger.warning(
+                    "Val split is empty. Using train split for validation (debug mode)."
+                )
+                self.val_ds = self.train_ds
+
+    def val_dataloader(self):
+        if self.val_ds is None:
+            self.val_ds = self.val_dataset()
+        return DensePaddingDataLoader(
+            self.val_ds,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+            drop_last=False,
+        )
 
     def prepare_data(self):
         """Two-pass preprocessing: PyG conversion then Boltz-1 pLDDT labels."""
