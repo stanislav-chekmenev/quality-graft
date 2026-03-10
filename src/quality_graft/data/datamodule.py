@@ -12,12 +12,12 @@ Usage:
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
+from loguru import logger
 
 from la_proteina.proteinfoundation.datasets.pdb_data import (
     PDBLightningDataModule,
@@ -28,7 +28,6 @@ from quality_graft.data.cif_utils import parse_cif_chains, chains_to_boltz_yaml
 from quality_graft.data.plddt_utils import plddt_to_bin
 from quality_graft.data.wandb_logger import log_protein_metrics
 
-logger = logging.getLogger(__name__)
 
 
 class QualityGraftDataModule(PDBLightningDataModule):
@@ -90,11 +89,11 @@ class QualityGraftDataModule(PDBLightningDataModule):
         # Pass 2: Boltz-1 pLDDT label generation
         pt_files = sorted(self.processed_dir.glob("*.pt"))
         if not pt_files:
-            logger.warning("No .pt files found in %s, skipping Boltz pass.", self.processed_dir)
+            logger.warning("No .pt files found in {}, skipping Boltz pass.", self.processed_dir)
             return
 
         file_names = [f.name for f in pt_files]
-        logger.info("Starting Boltz-1 pLDDT pass on %d structures.", len(file_names))
+        logger.info("Starting Boltz-1 pLDDT pass on {} structures.", len(file_names))
 
         self.boltz_work_dir.mkdir(parents=True, exist_ok=True)
         self.boltz_inputs_dir.mkdir(parents=True, exist_ok=True)
@@ -132,7 +131,7 @@ class QualityGraftDataModule(PDBLightningDataModule):
             n_residues = graph.coords.shape[0]
             if plddt_np.shape[0] != n_residues:
                 logger.warning(
-                    "[%s] pLDDT length %d != graph residues %d, skipping.",
+                    "[{}] pLDDT length {} != graph residues {}, skipping.",
                     structure_id, plddt_np.shape[0], n_residues,
                 )
                 n_failed += 1
@@ -145,7 +144,7 @@ class QualityGraftDataModule(PDBLightningDataModule):
             torch.save(graph, pt_path)
             n_processed += 1
             logger.info(
-                "[%s] pLDDT saved (mean=%.3f, %d residues).",
+                "[{}] pLDDT saved (mean={:.3f}, {} residues).",
                 structure_id, graph.plddt.mean().item(), n_residues,
             )
 
@@ -161,7 +160,7 @@ class QualityGraftDataModule(PDBLightningDataModule):
             )
 
         logger.info(
-            "Boltz pass complete: processed=%d, skipped=%d, failed=%d",
+            "Boltz pass complete: processed={}, skipped={}, failed={}",
             n_processed, n_skipped, n_failed,
         )
 
@@ -176,13 +175,13 @@ class QualityGraftDataModule(PDBLightningDataModule):
             if gz_path.exists():
                 cif_path = gz_path
             else:
-                logger.warning("[%s] CIF not found: %s", structure_id, cif_path)
+                logger.warning("[{}] CIF not found: {}", structure_id, cif_path)
                 return None
 
         try:
             chains = parse_cif_chains(cif_path)
         except Exception as e:
-            logger.warning("[%s] CIF parse failed: %s", structure_id, e)
+            logger.warning("[{}] CIF parse failed: {}", structure_id, e)
             return None
 
         # Generate Boltz YAML
@@ -206,7 +205,7 @@ class QualityGraftDataModule(PDBLightningDataModule):
         )
 
         if not result.success or result.plddt is None:
-            logger.warning("[%s] Boltz failed: %s", structure_id, result.error_msg)
+            logger.warning("[{}] Boltz failed: {}", structure_id, result.error_msg)
             return None
 
         return result.plddt
