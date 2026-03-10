@@ -6,6 +6,7 @@ All public functions are no-ops when W&B is not initialized
 
 import argparse
 import logging
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -92,6 +93,50 @@ def compute_protein_metrics(
         "protein/boltz_walltime_s": elapsed_s,
     }
     return metrics
+
+
+def collect_dataset_stats(processed_dir: Path) -> list[dict[str, Any]]:
+    """Scan all .pt files in processed_dir and collect metrics for those with pLDDT labels.
+
+    Each labeled structure produces a metrics dict (from ``compute_protein_metrics``)
+    plus a ``_plddt_array`` key holding the raw numpy array (needed by
+    ``log_dataset_summary``).
+
+    Parameters
+    ----------
+    processed_dir : Path
+        Directory containing PyG ``.pt`` files with optional ``plddt`` attribute.
+
+    Returns
+    -------
+    list[dict]
+        One metrics dict per labeled structure.
+    """
+    import torch
+
+    processed_dir = Path(processed_dir)
+    pt_files = sorted(processed_dir.glob("*.pt"))
+    protein_stats: list[dict[str, Any]] = []
+
+    for pt_path in pt_files:
+        graph = torch.load(pt_path, weights_only=False)
+        if not hasattr(graph, "plddt") or graph.plddt is None:
+            continue
+
+        structure_id = pt_path.stem
+        plddt_np = graph.plddt.numpy()
+        n_residues = plddt_np.shape[0]
+
+        metrics = compute_protein_metrics(
+            structure_id=structure_id,
+            plddt=plddt_np,
+            n_residues=n_residues,
+            elapsed_s=0.0,
+        )
+        metrics["_plddt_array"] = plddt_np
+        protein_stats.append(metrics)
+
+    return protein_stats
 
 
 # ---------------------------------------------------------------------------
