@@ -186,7 +186,7 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
         accumulate_grad_batches=train_cfg.accumulate_grad_batches,
         log_every_n_steps=train_cfg.get("log_every_n_steps", 50),
         limit_val_batches=train_cfg.get("limit_val_batches", 1.0),
-        val_check_interval=train_cfg.get("val_check_interval", 1.0),
+        check_val_every_n_epoch=train_cfg.get("check_val_every_n_epoch", 1),
         logger=wandb_logger,
         callbacks=callbacks,
     )

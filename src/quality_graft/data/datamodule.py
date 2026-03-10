@@ -21,7 +21,7 @@ import torch
 from la_proteina.proteinfoundation.datasets.pdb_data import (
     PDBLightningDataModule,
 )
-from proteinfoundation.utils.dense_padding_data_loader import DensePaddingDataLoader
+from src.la_proteina.proteinfoundation.utils.dense_padding_data_loader import DensePaddingDataLoader
 from quality_graft.data.boltz_runner import run_boltz_predict
 from quality_graft.data.cif_utils import parse_cif_chains, chains_to_boltz_yaml
 from quality_graft.data.plddt_utils import plddt_to_bin
