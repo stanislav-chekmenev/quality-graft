@@ -132,7 +132,9 @@ class LaProteinaWrapper(nn.Module):
         self.deterministic_encode = deterministic_encode
 
         # Freeze everything -- no gradients through La-Proteina
+        # Set to eval() mode
         self.requires_grad_(False)
+        self.eval()
 
     # ------------------------------------------------------------------
     # Factory class methods
@@ -178,7 +180,7 @@ class LaProteinaWrapper(nn.Module):
         proteina_ckpt_path: str,
         device: str,
         use_decoder: bool = False,
-        t_value: float = 1.0,
+        t_value: float = 0.99,
         deterministic_encode: bool = False,
         autoencoder_ckpt_path: Optional[str] = None,
     ) -> "LaProteinaWrapper":
@@ -263,8 +265,6 @@ class LaProteinaWrapper(nn.Module):
     # ------------------------------------------------------------------
     # Forward pass
     # ------------------------------------------------------------------
-
-    @torch.no_grad()
     def forward(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Extract La-Proteina intermediate representations from a protein structure.
 

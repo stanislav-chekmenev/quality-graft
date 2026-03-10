@@ -3,25 +3,24 @@
 
 Usage:
     # Preprocess only (downloads, PyG conversion, Boltz-1 pLDDT labels)
-    python scripts/train.py --mode=preprocess
+    python scripts/train.py mode=preprocess
 
     # Train (assumes preprocessing is done)
-    python scripts/train.py --mode=train
+    python scripts/train.py mode=train
 
     # Override config values
-    python scripts/train.py --mode=train training.max_epochs=10 training.batch_size=2
+    python scripts/train.py mode=train training.max_epochs=10 training.batch_size=2
 """
 
 from __future__ import annotations
 
-import argparse
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import hydra
 import lightning as L
-import torch
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
@@ -38,8 +37,9 @@ from la_proteina.proteinfoundation.datasets.pdb_data import (
     PDBDataSelector,
     PDBDataSplitter,
 )
+import la_proteina.proteinfoundation.datasets.transforms as lp_transforms
 from quality_graft.data.datamodule import QualityGraftDataModule
-from quality_graft.models.adaptor import AdaptorModule
+
 from quality_graft.models.confidence_head import BoltzConfidenceHead
 from quality_graft.models.la_proteina_wrapper import LaProteinaWrapper
 from quality_graft.models.quality_graft import QualityGraft
@@ -48,21 +48,43 @@ from quality_graft.training.lightning_module import QualityGraftLightningModule
 logger = logging.getLogger(__name__)
 
 
+class TransformWrapper:
+    """Wraps La-Proteina transforms whose __call__ is incompatible with
+    newer PyG BaseTransform (which requires a forward() method)."""
+
+    def __init__(self, transform_cls):
+        self._call = transform_cls.__call__
+
+    def __call__(self, data):
+        return self._call(None, data)
+
+
 def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
     """Build the data module from Hydra config."""
-    data_cfg = cfg.data.dataset
+    data_cfg = cfg.data
 
-    dataselector = PDBDataSelector(
+    if data_cfg.get("local_only", False):
+        dataselector = None
+    else:
+        dataselector = PDBDataSelector(
+            data_dir=data_cfg.data_dir,
+            max_length=data_cfg.max_length,
+            min_length=data_cfg.min_length,
+            molecule_type=data_cfg.molecule_type,
+            oligomeric_min=data_cfg.oligomeric_min,
+            oligomeric_max=data_cfg.oligomeric_max,
+        )
+    datasplitter = PDBDataSplitter(
         data_dir=data_cfg.data_dir,
-        max_length=data_cfg.max_length,
-        min_length=data_cfg.min_length,
-        molecule_type=data_cfg.molecule_type,
-        oligomeric_min=data_cfg.oligomeric_min,
-        oligomeric_max=data_cfg.oligomeric_max,
+        train_val_test=list(data_cfg.train_val_test),
     )
-    datasplitter = PDBDataSplitter(data_dir=data_cfg.data_dir)
 
     boltz_config = OmegaConf.to_container(data_cfg.boltz, resolve=True)
+
+    transforms = [
+        TransformWrapper(lp_transforms.CoordsToNanometers),
+        TransformWrapper(lp_transforms.CenterStructureTransform),
+    ]
 
     return QualityGraftDataModule(
         data_dir=data_cfg.data_dir,
@@ -73,6 +95,7 @@ def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
         num_plddt_bins=data_cfg.num_plddt_bins,
         batch_size=data_cfg.batch_size,
         num_workers=data_cfg.num_workers,
+        transforms=transforms,
     )
 
 
@@ -92,10 +115,10 @@ def build_model(cfg: DictConfig) -> QualityGraft:
     )
 
     # Adaptor (via Hydra instantiate)
-    adaptor = hydra.utils.instantiate(model_cfg.quality_graft.adaptor)
+    adaptor = hydra.utils.instantiate(model_cfg.adaptor)
 
     # Confidence head
-    ch_cfg = model_cfg.quality_graft.confidence_head
+    ch_cfg = model_cfg.confidence_head
     confidence_head = BoltzConfidenceHead(
         token_s=ch_cfg.token_s,
         token_z=ch_cfg.token_z,
@@ -128,7 +151,8 @@ def build_lightning_module(cfg: DictConfig, model: QualityGraft) -> QualityGraft
         betas=tuple(train_cfg.optimizer.betas),
         warmup_steps=train_cfg.scheduler.warmup_steps,
         min_lr=train_cfg.scheduler.min_lr,
-        num_plddt_bins=cfg.data.dataset.num_plddt_bins,
+        num_plddt_bins=cfg.data.num_plddt_bins,
+        debug_mode=train_cfg.get("debug_mode", False),
     )
 
 
@@ -145,8 +169,10 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
     )
 
     # Callbacks
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     callbacks = [
         ModelCheckpoint(
+            dirpath=f"{train_cfg.checkpoint_dir}/{run_timestamp}",
             monitor="val/loss",
             mode="min",
             save_top_k=3,
@@ -159,8 +185,12 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
     return L.Trainer(
         max_epochs=train_cfg.max_epochs,
         precision=train_cfg.precision,
+        accelerator=train_cfg.get("accelerator", "auto"),
         gradient_clip_val=train_cfg.gradient_clip_val,
         accumulate_grad_batches=train_cfg.accumulate_grad_batches,
+        log_every_n_steps=train_cfg.get("log_every_n_steps", 50),
+        limit_val_batches=train_cfg.get("limit_val_batches", 1.0),
+        check_val_every_n_epoch=train_cfg.get("check_val_every_n_epoch", 1),
         logger=wandb_logger,
         callbacks=callbacks,
     )
@@ -171,12 +201,7 @@ def main(cfg: DictConfig) -> None:
     """Main entry point."""
     logging.basicConfig(level=logging.INFO)
 
-    # Parse mode from sys.argv (before Hydra consumes args)
-    mode = "train"
-    for arg in sys.argv[1:]:
-        if arg.startswith("--mode="):
-            mode = arg.split("=")[1]
-            break
+    mode = cfg.get("mode", "train")
 
     logger.info("Mode: %s", mode)
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg))
@@ -188,7 +213,6 @@ def main(cfg: DictConfig) -> None:
 
     elif mode == "train":
         dm = build_data_module(cfg)
-        dm.setup("fit")
 
         model = build_model(cfg)
         lit_module = build_lightning_module(cfg, model)

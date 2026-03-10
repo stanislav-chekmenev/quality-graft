@@ -9,6 +9,7 @@ from __future__ import annotations
 import lightning as L
 import torch
 import torch.nn.functional as F
+from loguru import logger
 from torch import Tensor
 
 from quality_graft.models.quality_graft import QualityGraft
@@ -52,6 +53,7 @@ class QualityGraftLightningModule(L.LightningModule):
         warmup_steps: int = 500,
         min_lr: float = 1e-6,
         num_plddt_bins: int = 50,
+        debug_mode: bool = False,
     ):
         super().__init__()
         self.model = model
@@ -61,7 +63,40 @@ class QualityGraftLightningModule(L.LightningModule):
         self.warmup_steps = warmup_steps
         self.min_lr = min_lr
         self.num_plddt_bins = num_plddt_bins
+        self.debug_mode = debug_mode
         self.save_hyperparameters(ignore=["model"])
+
+    # ------------------------------------------------------------------
+    # Diagnostic: count modules in train vs eval per component
+    # ------------------------------------------------------------------
+    def _count_modes(self, module: torch.nn.Module) -> tuple[int, int]:
+        """Return (n_train, n_eval) for all sub-modules."""
+        n_train = n_eval = 0
+        for m in module.modules():
+            if m.training:
+                n_train += 1
+            else:
+                n_eval += 1
+        return n_train, n_eval
+
+    def _log_mode_summary(self, phase: str, step: int) -> None:
+        """Log train/eval mode counts for each component."""
+        components = {
+            "la_proteina": self.model.la_proteina,
+            "adaptor": self.model.adaptor,
+            "confidence_head": self.model.confidence_head,
+        }
+        parts = [f"[{phase} step={step}]"]
+        for name, mod in components.items():
+            n_train, n_eval = self._count_modes(mod)
+            parts.append(f"{name}: train={n_train} eval={n_eval}")
+
+        # Check a pairformer layer directly
+        pf = self.model.confidence_head.confidence_module.pairformer_module
+        pf_layer0_training = pf.layers[0].training if len(pf.layers) > 0 else None
+        parts.append(f"pairformer_layer0.training={pf_layer0_training}")
+
+        logger.info(" | ".join(parts))
 
     def _compute_loss(self, plddt_logits: Tensor, plddt_labels: Tensor, mask: Tensor) -> Tensor:
         """Masked cross-entropy loss over pLDDT bins.
@@ -80,16 +115,60 @@ class QualityGraftLightningModule(L.LightningModule):
         loss = loss.view_as(plddt_labels) * mask
         return loss.sum() / mask.sum().clamp(min=1)
 
+    def on_train_epoch_start(self):
+        """Keep frozen components in eval() after Lightning's model.train()."""
+        self.model.la_proteina.eval()
+        self.model.confidence_head.eval()
+        self.model.adaptor.train()
+        if self.debug_mode:
+            val_freq = self.trainer.check_val_every_n_epoch or 1
+            if self.current_epoch % val_freq == 0 or self.current_epoch < 3:
+                self._log_mode_summary("on_train_epoch_start", self.current_epoch)
+
+    def on_train_batch_start(self, batch, batch_idx):
+        """Re-enforce eval() on frozen components — check both independently."""
+        needs_fix = False
+        if self.model.la_proteina.training:
+            self.model.la_proteina.eval()
+            needs_fix = True
+        if self.model.confidence_head.training:
+            self.model.confidence_head.eval()
+            needs_fix = True
+        if needs_fix:
+            logger.warning(
+                f"[on_train_batch_start epoch={self.current_epoch} batch={batch_idx}] "
+                "Had to re-enforce eval() on frozen components!"
+            )
+            if self.debug_mode:
+                self._log_mode_summary("after_fix", self.global_step)
+
+    def on_validation_epoch_start(self):
+        """Put entire model in eval() for validation."""
+        self.model.eval()
+        if self.debug_mode:
+            self._log_mode_summary("on_validation_epoch_start", self.current_epoch)
+
+    def on_validation_epoch_end(self):
+        """Log modes right after validation ends (before Lightning restores train)."""
+        if self.debug_mode:
+            self._log_mode_summary("on_validation_epoch_end", self.current_epoch)
+
     def training_step(self, batch, batch_idx):
+        if self.debug_mode:
+            val_freq = self.trainer.check_val_every_n_epoch or 1
+            if self.current_epoch % val_freq == 0 or self.current_epoch < 3:
+                self._log_mode_summary("training_step_BEFORE_forward", self.global_step)
         outputs = self.model(batch)
         mask = batch["mask"]
         if mask.dtype == torch.bool:
             mask = mask.float()
         loss = self._compute_loss(outputs["plddt_logits"], batch["plddt_bin"], mask)
-        self.log("train/loss", loss, prog_bar=True, sync_dist=True)
+        self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
+        if batch_idx == 0:
+            self._log_mode_summary("validation_step_BEFORE_forward", self.global_step)
         outputs = self.model(batch)
         mask = batch["mask"]
         if mask.dtype == torch.bool:
