@@ -4,7 +4,6 @@ All public functions are no-ops when W&B is not initialized
 (guard on ``wandb.run is not None``).
 """
 
-import argparse
 import logging
 from pathlib import Path
 from typing import Any
@@ -137,38 +136,6 @@ def collect_dataset_stats(processed_dir: Path) -> list[dict[str, Any]]:
         protein_stats.append(metrics)
 
     return protein_stats
-
-
-# ---------------------------------------------------------------------------
-# W&B lifecycle
-# ---------------------------------------------------------------------------
-
-def init_wandb_run(args: argparse.Namespace) -> None:
-    """Initialize a W&B run with config derived from CLI args.
-
-    No-op if ``args.no_wandb`` is ``True`` (or the attribute is missing).
-    """
-    if getattr(args, "no_wandb", True):
-        return
-
-    import wandb
-
-    wandb.init(
-        project=getattr(args, "wandb_project", "quality-graft"),
-        name=getattr(args, "wandb_run_name", None),
-        entity=getattr(args, "wandb_entity", None),
-        job_type="dataset-generation",
-        config={
-            "model": getattr(args, "model", "boltz1"),
-            "diffusion_samples": getattr(args, "diffusion_samples", 1),
-            "sampling_steps": getattr(args, "sampling_steps", 200),
-            "recycling_steps": getattr(args, "recycling_steps", 3),
-            "use_msa_server": getattr(args, "use_msa_server", False),
-            "num_plddt_bins": getattr(args, "num_bins", 50),
-            "accelerator": getattr(args, "accelerator", "gpu"),
-            "input_dir": str(getattr(args, "input_dir", "")),
-        },
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -575,14 +542,3 @@ def log_dataset_summary(protein_stats: list[dict]) -> None:
         ])
     table = wandb.Table(columns=columns, data=rows)
     wandb.log({"dataset/protein_table": table})
-
-
-def finish_wandb_run() -> None:
-    """Finalize W&B run. No-op if ``wandb.run is None``."""
-    try:
-        import wandb
-
-        if wandb.run is not None:
-            wandb.finish()
-    except ImportError:
-        pass
