@@ -11,8 +11,8 @@ scheduler:
 
 # Trainer & data configuration
 max_length: 128
-batch_size: 4
-num_workers: 4
+batch_size: 16
+num_workers: 16
 precision: bf16
 max_epochs: 50
 gradient_clip_val: 1.0

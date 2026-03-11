@@ -17,7 +17,7 @@ batch_size: ${training.batch_size}
 num_workers: ${training.num_workers}
 
 # PDBDataSelector filtering params
-fraction: 0.05
+fraction: 0.10
 worst_resolution: 2.5
 best_resolution: null
 experiment_types: ["diffraction", "EM"]

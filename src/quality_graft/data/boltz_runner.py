@@ -20,16 +20,29 @@ import numpy as np
 def _clean_env_for_boltz() -> dict[str, str]:
     """Return a copy of os.environ with PYTHONPATH entries that contain
     our vendored ``src/boltz/`` removed, so the pip-installed ``boltz``
-    package is found instead."""
+    package is found instead.  Also ensures the pip-installed NVIDIA
+    cuBLAS libraries are on LD_LIBRARY_PATH so cuequivariance_ops can
+    find them."""
     env = os.environ.copy()
     pythonpath = env.get("PYTHONPATH", "")
-    if not pythonpath:
-        return env
-    cleaned = [
-        p for p in pythonpath.split(os.pathsep)
-        if not (Path(p) / "boltz").is_dir()
-    ]
-    env["PYTHONPATH"] = os.pathsep.join(cleaned)
+    if pythonpath:
+        cleaned = [
+            p for p in pythonpath.split(os.pathsep)
+            if not (Path(p) / "boltz").is_dir()
+        ]
+        env["PYTHONPATH"] = os.pathsep.join(cleaned)
+
+    # cuequivariance_ops links against libcublas.so.12 which lives in the
+    # pip nvidia-cublas-cu12 package, not on the default library path.
+    try:
+        import nvidia.cublas.lib as _cublas_lib
+        cublas_dir = str(Path(_cublas_lib.__file__).parent)
+        ld_path = env.get("LD_LIBRARY_PATH", "")
+        if cublas_dir not in ld_path:
+            env["LD_LIBRARY_PATH"] = cublas_dir + (os.pathsep + ld_path if ld_path else "")
+    except ImportError:
+        pass
+
     return env
 
 
