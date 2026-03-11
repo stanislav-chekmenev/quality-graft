@@ -347,6 +347,12 @@ def run_boltz_predict_dir(
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
         returncode = proc.returncode
 
+        # Always log subprocess output for debuggability
+        if proc.stdout.strip():
+            logger.debug("Boltz stdout:\n{}", proc.stdout[-2000:])
+        if proc.stderr.strip():
+            logger.debug("Boltz stderr:\n{}", proc.stderr[-2000:])
+
         if returncode != 0:
             stderr = proc.stderr
             if "CUDA out of memory" in stderr or "OutOfMemoryError" in stderr:
@@ -368,17 +374,30 @@ def run_boltz_predict_dir(
         returncode = -1
         logger.error("Boltz subprocess exception: {}", e)
 
-    # Collect results for whatever outputs exist
+    # Collect results for whatever outputs exist.
+    # In directory mode, Boltz nests output under boltz_results_{input_dir_name}/
+    # so try that first, then fall back to out_dir directly.
+    boltz_results_dir = out_dir / f"boltz_results_{input_dir.name}"
+    lookup_dir = boltz_results_dir if boltz_results_dir.is_dir() else out_dir
+
+    if lookup_dir != out_dir:
+        logger.debug("Using Boltz results directory: {}", lookup_dir)
+
     results: dict[str, BoltzResult] = {}
     for sid in structure_ids:
-        npz_path = find_plddt_npz(out_dir, sid)
+        npz_path = find_plddt_npz(lookup_dir, sid)
         if npz_path is None:
+            logger.warning(
+                "[{}] pLDDT output not found under {}. "
+                "Boltz may have skipped or failed this structure silently.",
+                sid, lookup_dir,
+            )
             continue
 
         plddt = np.load(npz_path)["plddt"]
 
         conf_json = None
-        json_path = find_confidence_json(out_dir, sid)
+        json_path = find_confidence_json(lookup_dir, sid)
         if json_path is not None:
             with open(json_path) as f:
                 conf_json = json.load(f)

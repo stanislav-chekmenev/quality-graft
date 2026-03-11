@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Debug preprocessing run using a single CIF file (data/1ubq.cif).
-# Sets up directory structure, copies the CIF into raw/, and runs
+# Debug preprocessing run using local CIF files (data/*.cif).
+# Sets up directory structure, copies CIFs into raw/, and runs
 # the preprocess pipeline with local_only=true (skips PDBManager).
 set -euo pipefail
 
@@ -15,6 +15,7 @@ export PYTHONPATH="${PYTHONPATH:-}:$PROJECT_ROOT:$PROJECT_ROOT/src"
 # --- Prepare debug data directory ---
 mkdir -p "$DEBUG_DIR/raw"
 cp -n "$PROJECT_ROOT/data/1ubq.cif" "$DEBUG_DIR/raw/1ubq.cif" 2>/dev/null || true
+cp -n "$PROJECT_ROOT/data/2gb1.cif" "$DEBUG_DIR/raw/2gb1.cif" 2>/dev/null || true
 
 # --- Run preprocessing ---
 python "$PROJECT_ROOT/scripts/train.py" \

@@ -145,6 +145,44 @@ class TestRunBoltzPredictDir:
         assert "OOM" in result.error_msg
         assert "GPU memory exhaustion" in result.error_msg
 
+    def test_directory_mode_layout(self, tmp_path):
+        """Boltz directory mode creates boltz_results_{input_dir_name}/ layout."""
+        input_dir = tmp_path / "inputs"
+        input_dir.mkdir()
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+
+        (input_dir / "1ubq.yaml").write_text("dummy")
+        (input_dir / "2gb1.yaml").write_text("dummy")
+
+        structure_ids = ["1ubq", "2gb1"]
+
+        # Simulate real Boltz directory-mode output layout:
+        # out_dir/boltz_results_inputs/predictions/{sid}/plddt_{sid}_model_0.npz
+        for sid in structure_ids:
+            pred_dir = out_dir / "boltz_results_inputs" / "predictions" / sid
+            pred_dir.mkdir(parents=True)
+            np.savez(pred_dir / f"plddt_{sid}_model_0.npz", plddt=np.array([0.85, 0.92]))
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stderr = ""
+        mock_proc.stdout = ""
+
+        with patch("quality_graft.data.boltz_runner.subprocess.run", return_value=mock_proc):
+            result = run_boltz_predict_dir(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                structure_ids=structure_ids,
+            )
+
+        assert result.n_submitted == 2
+        assert result.returncode == 0
+        assert len(result.results) == 2
+        assert result.results["1ubq"].success is True
+        assert result.results["2gb1"].success is True
+        np.testing.assert_array_equal(result.results["1ubq"].plddt, [0.85, 0.92])
+
     def test_empty_directory(self, tmp_path):
         """No structures submitted skips subprocess entirely."""
         input_dir = tmp_path / "inputs"
