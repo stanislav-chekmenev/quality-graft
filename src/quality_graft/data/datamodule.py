@@ -12,9 +12,9 @@ Usage:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import torch
 from loguru import logger
 
@@ -22,7 +22,6 @@ from la_proteina.proteinfoundation.datasets.pdb_data import (
     PDBLightningDataModule,
 )
 from src.la_proteina.proteinfoundation.utils.dense_padding_data_loader import DensePaddingDataLoader
-from quality_graft.data.boltz_runner import run_boltz_predict
 from quality_graft.data.cif_utils import parse_cif_chains, chains_to_boltz_yaml
 from quality_graft.data.plddt_utils import plddt_to_bin
 
@@ -99,31 +98,76 @@ class QualityGraftDataModule(PDBLightningDataModule):
         self._run_boltz_pass(file_names)
 
     def _run_boltz_pass(self, file_names: List[str]) -> None:
-        """Run Boltz-1 on structures that don't yet have pLDDT labels."""
+        """Run Boltz-1 on structures that don't yet have pLDDT labels.
+
+        Three-phase pipeline:
+          Phase 1: Prepare YAMLs for structures needing pLDDT
+          Phase 2: Single boltz predict invocation on the directory
+          Phase 3: Collect results and merge into .pt files
+        """
+        # Phase 1: Prepare all YAMLs
+        # Clear stale YAMLs from previous runs
+        for old_yaml in self.boltz_inputs_dir.glob("*.yaml"):
+            old_yaml.unlink()
+
+        submitted_ids: List[str] = []
         n_skipped = 0
-        n_processed = 0
-        n_failed = 0
 
         for fname in file_names:
             pt_path = self.processed_dir / fname
             graph = torch.load(pt_path, weights_only=False)
 
-            # Skip if already has pLDDT labels
             if hasattr(graph, "plddt_bin") and graph.plddt_bin is not None:
                 n_skipped += 1
                 continue
 
-            # Derive structure ID and find CIF
             structure_id = fname.replace(".pt", "")
             pdb_code = structure_id.split("_")[0]
 
-            plddt_np = self._run_boltz_for_structure(structure_id, pdb_code)
+            yaml_path = self._prepare_boltz_yaml(structure_id, pdb_code)
+            if yaml_path is not None:
+                submitted_ids.append(structure_id)
 
-            if plddt_np is None:
+        logger.info(
+            "Phase 1 complete: {} to process, {} skipped (already have pLDDT).",
+            len(submitted_ids), n_skipped,
+        )
+
+        if not submitted_ids:
+            logger.info("No structures need Boltz processing. Done.")
+            return
+
+        # Phase 2: Single Boltz invocation
+        from quality_graft.data.boltz_runner import run_boltz_predict_dir
+
+        batch_result = run_boltz_predict_dir(
+            input_dir=self.boltz_inputs_dir,
+            out_dir=self.boltz_work_dir,
+            structure_ids=submitted_ids,
+            model=self.boltz_config.get("model", "boltz1"),
+            devices=self.boltz_config.get("devices", 1),
+            accelerator=self.boltz_config.get("accelerator", "gpu"),
+            diffusion_samples=self.boltz_config.get("diffusion_samples", 1),
+            sampling_steps=self.boltz_config.get("sampling_steps", 200),
+            recycling_steps=self.boltz_config.get("recycling_steps", 3),
+            use_msa_server=self.boltz_config.get("use_msa_server", False),
+        )
+
+        # Phase 3: Collect results and merge into .pt files
+        n_processed = 0
+        n_failed = 0
+
+        for structure_id in submitted_ids:
+            fname = f"{structure_id}.pt"
+            pt_path = self.processed_dir / fname
+            graph = torch.load(pt_path, weights_only=False)
+
+            boltz_result = batch_result.results.get(structure_id)
+            if boltz_result is None or boltz_result.plddt is None:
                 n_failed += 1
                 continue
 
-            # Handle residue count mismatch
+            plddt_np = boltz_result.plddt
             n_residues = graph.coords.shape[0]
             if plddt_np.shape[0] != n_residues:
                 logger.warning(
@@ -133,7 +177,6 @@ class QualityGraftDataModule(PDBLightningDataModule):
                 n_failed += 1
                 continue
 
-            # Store labels in graph
             graph.plddt = torch.tensor(plddt_np, dtype=torch.float32)
             graph.plddt_bin = plddt_to_bin(graph.plddt, num_bins=self.num_plddt_bins)
 
@@ -144,17 +187,13 @@ class QualityGraftDataModule(PDBLightningDataModule):
                 structure_id, graph.plddt.mean().item(), n_residues,
             )
 
-
         logger.info(
             "Boltz pass complete: processed={}, skipped={}, failed={}",
             n_processed, n_skipped, n_failed,
         )
 
-    def _run_boltz_for_structure(
-        self, structure_id: str, pdb_code: str
-    ) -> Optional[np.ndarray]:
-        """Run Boltz-1 prediction for a single structure."""
-        # Find CIF file
+    def _prepare_boltz_yaml(self, structure_id: str, pdb_code: str) -> Optional[Path]:
+        """Parse CIF and write Boltz input YAML. Returns yaml_path or None on failure."""
         cif_path = self.raw_dir / f"{pdb_code}.{self.format}"
         if not cif_path.exists():
             gz_path = cif_path.with_suffix(f".{self.format}.gz")
@@ -170,28 +209,8 @@ class QualityGraftDataModule(PDBLightningDataModule):
             logger.warning("[{}] CIF parse failed: {}", structure_id, e)
             return None
 
-        # Generate Boltz YAML
         use_msa = self.boltz_config.get("use_msa_server", False)
         yaml_content = chains_to_boltz_yaml(chains, use_msa=use_msa)
         yaml_path = self.boltz_inputs_dir / f"{structure_id}.yaml"
         yaml_path.write_text(yaml_content)
-
-        # Run Boltz
-        result = run_boltz_predict(
-            yaml_path=yaml_path,
-            out_dir=self.boltz_work_dir,
-            model=self.boltz_config.get("model", "boltz1"),
-            devices=self.boltz_config.get("devices", 1),
-            accelerator=self.boltz_config.get("accelerator", "gpu"),
-            diffusion_samples=self.boltz_config.get("diffusion_samples", 1),
-            sampling_steps=self.boltz_config.get("sampling_steps", 200),
-            recycling_steps=self.boltz_config.get("recycling_steps", 3),
-            use_msa_server=use_msa,
-            override=False,
-        )
-
-        if not result.success or result.plddt is None:
-            logger.warning("[{}] Boltz failed: {}", structure_id, result.error_msg)
-            return None
-
-        return result.plddt
+        return yaml_path
