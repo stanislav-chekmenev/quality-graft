@@ -57,6 +57,16 @@ class BoltzResult:
     error_msg: str | None
 
 
+@dataclass
+class BoltzBatchResult:
+    """Result of a batch Boltz prediction run on a directory of YAMLs."""
+
+    results: dict[str, BoltzResult]  # structure_id -> result, for outputs found
+    n_submitted: int  # number of YAMLs in the input directory
+    returncode: int  # subprocess exit code
+    error_msg: str | None  # stderr summary if non-zero exit
+
+
 def build_boltz_command(
     yaml_path: Path,
     out_dir: Path,
