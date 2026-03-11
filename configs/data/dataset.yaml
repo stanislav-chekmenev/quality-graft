@@ -12,6 +12,13 @@ train_val_test: [0.8, 0.15, 0.05]
 batch_size: ${training.batch_size}
 num_workers: ${training.num_workers}
 
+# PDBDataSelector filtering params (null = use PDBDataSelector defaults)
+fraction: 1.0
+worst_resolution: null
+best_resolution: null
+experiment_types: null
+selector_num_workers: 32
+
 boltz:
   model: boltz1
   diffusion_samples: 1

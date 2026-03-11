@@ -9,7 +9,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEBUG_DIR="$PROJECT_ROOT/data/debug"
 
 # --- Environment ---
-eval "$(micromamba shell hook --shell bash)" && micromamba activate quality_graft_env
+# eval "$(micromamba shell hook --shell bash)" && micromamba activate quality_graft_env
 export PYTHONPATH="${PYTHONPATH:-}:$PROJECT_ROOT:$PROJECT_ROOT/src"
 
 # --- Prepare debug data directory ---

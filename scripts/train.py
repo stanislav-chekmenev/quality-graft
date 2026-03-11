@@ -69,11 +69,16 @@ def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
     else:
         dataselector = PDBDataSelector(
             data_dir=data_cfg.data_dir,
+            fraction=data_cfg.get("fraction", 1.0),
             max_length=data_cfg.max_length,
             min_length=data_cfg.min_length,
             molecule_type=data_cfg.molecule_type,
+            experiment_types=data_cfg.get("experiment_types", None),
             oligomeric_min=data_cfg.oligomeric_min,
             oligomeric_max=data_cfg.oligomeric_max,
+            worst_resolution=data_cfg.get("worst_resolution", None),
+            best_resolution=data_cfg.get("best_resolution", None),
+            num_workers=data_cfg.get("selector_num_workers", 32),
         )
     datasplitter = PDBDataSplitter(
         data_dir=data_cfg.data_dir,
