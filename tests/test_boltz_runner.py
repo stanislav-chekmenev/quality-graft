@@ -118,3 +118,48 @@ class TestRunBoltzPredictDir:
         assert len(result.results) == 1
         assert "1ubq_A" in result.results
         assert "2abc_B" not in result.results
+
+    def test_oom_detection(self, tmp_path):
+        """OOM errors produce specific error message."""
+        input_dir = tmp_path / "inputs"
+        input_dir.mkdir()
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+
+        (input_dir / "1ubq_A.yaml").write_text("dummy")
+        structure_ids = ["1ubq_A"]
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.stderr = "RuntimeError: CUDA out of memory. Tried to allocate 2.00 GiB"
+        mock_proc.stdout = ""
+
+        with patch("quality_graft.data.boltz_runner.subprocess.run", return_value=mock_proc):
+            result = run_boltz_predict_dir(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                structure_ids=structure_ids,
+            )
+
+        assert result.returncode == 1
+        assert "OOM" in result.error_msg
+        assert "GPU memory exhaustion" in result.error_msg
+
+    def test_empty_directory(self, tmp_path):
+        """No structures submitted skips subprocess entirely."""
+        input_dir = tmp_path / "inputs"
+        input_dir.mkdir()
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+
+        with patch("quality_graft.data.boltz_runner.subprocess.run") as mock_run:
+            result = run_boltz_predict_dir(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                structure_ids=[],
+            )
+            mock_run.assert_not_called()
+
+        assert result.n_submitted == 0
+        assert len(result.results) == 0
+        assert result.returncode == 0
