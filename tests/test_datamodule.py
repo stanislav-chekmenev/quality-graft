@@ -199,3 +199,132 @@ class TestPrepareYamlOutputDir:
 
             assert result is not None
             assert result.parent == boltz_inputs
+
+
+class TestParallelBoltzPass:
+    """Test parallel chunked Boltz execution."""
+
+    def _setup_structures(self, tmpdir, structure_ids, n_residues=5):
+        """Helper to create .pt files and raw CIFs for testing."""
+        processed = Path(tmpdir) / "processed"
+        processed.mkdir(exist_ok=True)
+        raw = Path(tmpdir) / "raw"
+        raw.mkdir(exist_ok=True)
+        boltz_work = Path(tmpdir) / "boltz_work"
+        boltz_work.mkdir(exist_ok=True)
+        (boltz_work / "inputs").mkdir(exist_ok=True)
+
+        for sid in structure_ids:
+            graph = _make_fake_graph(sid, n_residues=n_residues, has_plddt=False)
+            torch.save(graph, processed / f"{sid}.pt")
+            pdb_code = sid.split("_")[0]
+            (raw / f"{pdb_code}.cif").write_text("dummy")
+
+        return processed
+
+    def test_structures_split_into_chunks(self):
+        """Verify run_boltz_predict_dir is called once per chunk."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sids = [f"pdb{i}_A" for i in range(25)]
+            self._setup_structures(tmpdir, sids)
+
+            dm = QualityGraftDataModule(
+                data_dir=tmpdir,
+                boltz_config={
+                    "num_boltz_workers": 2,
+                    "chunk_size": 10,
+                },
+            )
+
+            fake_plddt = np.random.rand(5).astype(np.float32)
+
+            def mock_predict_dir(input_dir, out_dir, structure_ids, **kwargs):
+                return _make_batch_result({sid: fake_plddt.copy() for sid in structure_ids})
+
+            with patch.object(dm, "_prepare_boltz_yaml", return_value=Path("dummy.yaml")), \
+                 patch("quality_graft.data.datamodule.run_boltz_predict_dir", side_effect=mock_predict_dir) as mock_batch:
+                dm._run_boltz_pass([f"{sid}.pt" for sid in sids])
+
+            # 25 structures / chunk_size 10 = 3 chunks
+            assert mock_batch.call_count == 3
+
+            # Verify all structures got pLDDT
+            processed = Path(tmpdir) / "processed"
+            for sid in sids:
+                graph = torch.load(processed / f"{sid}.pt", weights_only=False)
+                assert hasattr(graph, "plddt"), f"{sid} missing plddt"
+                assert hasattr(graph, "plddt_bin"), f"{sid} missing plddt_bin"
+
+    def test_chunk_failure_doesnt_block_others(self):
+        """One chunk failing should not prevent other chunks from saving."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sids = [f"pdb{i}_A" for i in range(20)]
+            self._setup_structures(tmpdir, sids)
+
+            dm = QualityGraftDataModule(
+                data_dir=tmpdir,
+                boltz_config={
+                    "num_boltz_workers": 2,
+                    "chunk_size": 10,
+                },
+            )
+
+            fake_plddt = np.random.rand(5).astype(np.float32)
+
+            def mock_predict_dir(input_dir, out_dir, structure_ids, **kwargs):
+                # Fail chunk_000 deterministically by directory name
+                if input_dir.name == "chunk_000":
+                    return BoltzBatchResult(
+                        results={}, n_submitted=len(structure_ids),
+                        returncode=1, error_msg="Boltz OOM: GPU memory exhaustion",
+                    )
+                # All other chunks succeed
+                return _make_batch_result({sid: fake_plddt.copy() for sid in structure_ids})
+
+            with patch.object(dm, "_prepare_boltz_yaml", return_value=Path("dummy.yaml")), \
+                 patch("quality_graft.data.datamodule.run_boltz_predict_dir", side_effect=mock_predict_dir):
+                dm._run_boltz_pass([f"{sid}.pt" for sid in sids])
+
+            # At least some structures should have pLDDT (from the successful chunk)
+            processed = Path(tmpdir) / "processed"
+            labeled = 0
+            for sid in sids:
+                graph = torch.load(processed / f"{sid}.pt", weights_only=False)
+                if hasattr(graph, "plddt") and graph.plddt is not None:
+                    labeled += 1
+            assert labeled == 10  # One chunk of 10 succeeded
+
+    def test_each_chunk_gets_own_directories(self):
+        """Verify each chunk gets unique input and output dirs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sids = [f"pdb{i}_A" for i in range(5)]
+            self._setup_structures(tmpdir, sids)
+
+            dm = QualityGraftDataModule(
+                data_dir=tmpdir,
+                boltz_config={
+                    "num_boltz_workers": 2,
+                    "chunk_size": 3,
+                },
+            )
+
+            fake_plddt = np.random.rand(5).astype(np.float32)
+            seen_input_dirs = []
+            seen_out_dirs = []
+
+            def mock_predict_dir(input_dir, out_dir, structure_ids, **kwargs):
+                seen_input_dirs.append(input_dir)
+                seen_out_dirs.append(out_dir)
+                return _make_batch_result({sid: fake_plddt.copy() for sid in structure_ids})
+
+            with patch.object(dm, "_prepare_boltz_yaml", return_value=Path("dummy.yaml")), \
+                 patch("quality_graft.data.datamodule.run_boltz_predict_dir", side_effect=mock_predict_dir):
+                dm._run_boltz_pass([f"{sid}.pt" for sid in sids])
+
+            # 5 structures / chunk_size 3 = 2 chunks
+            assert len(seen_input_dirs) == 2
+            assert len(set(seen_input_dirs)) == 2  # All unique
+            assert len(set(seen_out_dirs)) == 2  # All unique
+            # Verify chunk naming
+            for d in seen_input_dirs:
+                assert d.name.startswith("chunk_")
