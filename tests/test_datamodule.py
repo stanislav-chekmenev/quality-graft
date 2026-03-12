@@ -71,7 +71,7 @@ class TestBoltzPassSkipsExisting:
                 boltz_config={},
             )
 
-            with patch("quality_graft.data.boltz_runner.run_boltz_predict_dir") as mock_batch:
+            with patch("quality_graft.data.datamodule.run_boltz_predict_dir") as mock_batch:
                 dm._run_boltz_pass(["test_pdb.pt"])
                 mock_batch.assert_not_called()
 
@@ -99,10 +99,12 @@ class TestBoltzPassProcessesNew:
             )
 
             fake_plddt = np.random.rand(5).astype(np.float32)
-            fake_result = _make_batch_result({"test_pdb": fake_plddt})
+
+            def mock_predict_dir(input_dir, out_dir, structure_ids, **kwargs):
+                return _make_batch_result({sid: fake_plddt.copy() for sid in structure_ids})
 
             with patch.object(dm, "_prepare_boltz_yaml", return_value=Path("dummy.yaml")), \
-                 patch("quality_graft.data.boltz_runner.run_boltz_predict_dir", return_value=fake_result):
+                 patch("quality_graft.data.datamodule.run_boltz_predict_dir", side_effect=mock_predict_dir):
                 dm._run_boltz_pass(["test_pdb.pt"])
 
             updated = torch.load(processed / "test_pdb.pt", weights_only=False)
@@ -135,10 +137,18 @@ class TestBoltzPassPartialFailure:
             )
 
             fake_plddt = np.random.rand(5).astype(np.float32)
-            fake_result = _make_batch_result({"good_A": fake_plddt, "bad_B": None})
+
+            def mock_predict_dir(input_dir, out_dir, structure_ids, **kwargs):
+                result_map = {}
+                for sid in structure_ids:
+                    if sid == "good_A":
+                        result_map[sid] = fake_plddt.copy()
+                    else:
+                        result_map[sid] = None
+                return _make_batch_result(result_map)
 
             with patch.object(dm, "_prepare_boltz_yaml", return_value=Path("dummy.yaml")), \
-                 patch("quality_graft.data.boltz_runner.run_boltz_predict_dir", return_value=fake_result):
+                 patch("quality_graft.data.datamodule.run_boltz_predict_dir", side_effect=mock_predict_dir):
                 dm._run_boltz_pass(["good_A.pt", "bad_B.pt"])
 
             good = torch.load(processed / "good_A.pt", weights_only=False)
