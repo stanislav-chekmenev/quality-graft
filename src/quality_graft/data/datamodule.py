@@ -192,8 +192,13 @@ class QualityGraftDataModule(PDBLightningDataModule):
             n_processed, n_skipped, n_failed,
         )
 
-    def _prepare_boltz_yaml(self, structure_id: str, pdb_code: str) -> Optional[Path]:
+    def _prepare_boltz_yaml(
+        self, structure_id: str, pdb_code: str, output_dir: Optional[Path] = None,
+    ) -> Optional[Path]:
         """Parse CIF and write Boltz input YAML. Returns yaml_path or None on failure."""
+        if output_dir is None:
+            output_dir = self.boltz_inputs_dir
+
         cif_path = self.raw_dir / f"{pdb_code}.{self.format}"
         if not cif_path.exists():
             gz_path = cif_path.with_suffix(f".{self.format}.gz")
@@ -211,6 +216,6 @@ class QualityGraftDataModule(PDBLightningDataModule):
 
         use_msa = self.boltz_config.get("use_msa_server", False)
         yaml_content = chains_to_boltz_yaml(chains, use_msa=use_msa)
-        yaml_path = self.boltz_inputs_dir / f"{structure_id}.yaml"
+        yaml_path = output_dir / f"{structure_id}.yaml"
         yaml_path.write_text(yaml_content)
         return yaml_path

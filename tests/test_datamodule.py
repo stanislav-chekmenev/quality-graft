@@ -146,3 +146,56 @@ class TestBoltzPassPartialFailure:
 
             assert hasattr(good, "plddt")
             assert not hasattr(bad, "plddt") or bad.plddt is None
+
+
+class TestPrepareYamlOutputDir:
+    """Test that _prepare_boltz_yaml writes to custom output_dir."""
+
+    def test_writes_to_custom_output_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            processed = Path(tmpdir) / "processed"
+            processed.mkdir()
+            raw = Path(tmpdir) / "raw"
+            raw.mkdir()
+            boltz_inputs = Path(tmpdir) / "boltz_work" / "inputs"
+            boltz_inputs.mkdir(parents=True)
+            custom_dir = Path(tmpdir) / "boltz_work" / "inputs" / "chunk_000"
+            custom_dir.mkdir(parents=True)
+
+            (raw / "test.cif").write_text("dummy")
+
+            dm = QualityGraftDataModule(
+                data_dir=tmpdir,
+                boltz_config={"use_msa_server": False},
+            )
+
+            with patch("quality_graft.data.datamodule.parse_cif_chains", return_value=[{"sequence": "ACGT"}]), \
+                 patch("quality_graft.data.datamodule.chains_to_boltz_yaml", return_value="dummy_yaml"):
+                result = dm._prepare_boltz_yaml("test_A", "test", output_dir=custom_dir)
+
+            assert result is not None
+            assert result.parent == custom_dir
+            assert (custom_dir / "test_A.yaml").exists()
+
+    def test_defaults_to_boltz_inputs_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            processed = Path(tmpdir) / "processed"
+            processed.mkdir()
+            raw = Path(tmpdir) / "raw"
+            raw.mkdir()
+            boltz_inputs = Path(tmpdir) / "boltz_work" / "inputs"
+            boltz_inputs.mkdir(parents=True)
+
+            (raw / "test.cif").write_text("dummy")
+
+            dm = QualityGraftDataModule(
+                data_dir=tmpdir,
+                boltz_config={"use_msa_server": False},
+            )
+
+            with patch("quality_graft.data.datamodule.parse_cif_chains", return_value=[{"sequence": "ACGT"}]), \
+                 patch("quality_graft.data.datamodule.chains_to_boltz_yaml", return_value="dummy_yaml"):
+                result = dm._prepare_boltz_yaml("test_A", "test")
+
+            assert result is not None
+            assert result.parent == boltz_inputs
