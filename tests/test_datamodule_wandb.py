@@ -55,8 +55,11 @@ def test_run_boltz_pass_saves_plddt(tmp_path):
         error_msg=None,
     )
 
+    def mock_predict_dir(input_dir, out_dir, structure_ids, **kwargs):
+        return fake_result
+
     with patch.object(dm, "_prepare_boltz_yaml", return_value=Path("dummy.yaml")), \
-         patch("quality_graft.data.boltz_runner.run_boltz_predict_dir", return_value=fake_result):
+         patch("quality_graft.data.datamodule.run_boltz_predict_dir", side_effect=mock_predict_dir):
         dm._run_boltz_pass(["test_structure.pt"])
 
     updated = torch.load(processed / "test_structure.pt", weights_only=False)
