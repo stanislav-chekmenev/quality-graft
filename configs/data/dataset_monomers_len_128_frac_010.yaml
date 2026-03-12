@@ -31,3 +31,5 @@ boltz:
   devices: 1
   accelerator: gpu
   use_msa_server: false
+  num_boltz_workers: 2
+  chunk_size: 10
