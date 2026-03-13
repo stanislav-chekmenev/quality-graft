@@ -22,7 +22,10 @@ python "$PROJECT_ROOT/scripts/train.py" \
     mode=preprocess \
     data.data_dir="$DEBUG_DIR" \
     data.local_only=true \
-    data.num_workers=1 \
+    data.selector_num_workers=4 \
+    data.boltz.num_boltz_workers=2 \
+    data.boltz.chunk_size=1 \
+    data.num_workers=4 \
     data.boltz.sampling_steps=20 \
     data.boltz.recycling_steps=1 \
     training.batch_size=1 \

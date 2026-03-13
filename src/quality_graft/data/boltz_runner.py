@@ -350,8 +350,6 @@ def run_boltz_predict_dir(
         # Always log subprocess output for debuggability
         if proc.stdout.strip():
             logger.debug("Boltz stdout:\n{}", proc.stdout[-2000:])
-        if proc.stderr.strip():
-            logger.debug("Boltz stderr:\n{}", proc.stderr[-2000:])
 
         if returncode != 0:
             stderr = proc.stderr
