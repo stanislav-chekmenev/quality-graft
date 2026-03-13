@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=qg_prep_full
+#SBATCH --job-name=make_full_ds
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:h100:nvl:1
@@ -37,13 +37,13 @@ python "$PROJECT_ROOT/scripts/train.py" \
     mode=preprocess \
     data.data_dir="$SCRATCH_DIR" \
     data.selector_num_workers=32 \
-    data.boltz.num_boltz_workers=24 \
+    data.boltz.num_boltz_workers=20 \
     data.boltz.chunk_size=10 \
     training.max_length=128
 
 # Copy results to my data dir in the Bronstein group
 echo "Copying results to group data directory..."
-GROUP_DATA_DIR="/mnt/labs/bronstein/schekmenev/qg_debug"
+GROUP_DATA_DIR="/mnt/labs/bronstein/schekmenev"
 
 mkdir -p "$GROUP_DATA_DIR"
 cp -r "$SCRATCH_DIR" "$GROUP_DATA_DIR/"
