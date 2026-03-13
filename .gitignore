@@ -12,6 +12,7 @@ ckpt/
 # Logging
 wandb
 wandb_*
+logs
 
 # Outputs
 outputs
