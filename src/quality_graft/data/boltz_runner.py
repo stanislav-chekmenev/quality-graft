@@ -296,6 +296,7 @@ def run_boltz_predict_dir(
     sampling_steps: int = 200,
     recycling_steps: int = 3,
     use_msa_server: bool = False,
+    timeout: int | None = None,
 ) -> BoltzBatchResult:
     """Run boltz predict on a directory of YAMLs and collect results.
 
@@ -314,6 +315,7 @@ def run_boltz_predict_dir(
         sampling_steps: Number of sampling steps.
         recycling_steps: Number of recycling steps.
         use_msa_server: Whether to use the MSA server.
+        timeout: Max seconds to wait for the subprocess. None means no limit.
 
     Returns:
         BoltzBatchResult with per-structure results for outputs found.
@@ -344,7 +346,10 @@ def run_boltz_predict_dir(
 
     try:
         env = _clean_env_for_boltz()
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, env=env,
+            timeout=timeout,
+        )
         returncode = proc.returncode
 
         # Always log subprocess output for debuggability
@@ -366,6 +371,15 @@ def run_boltz_predict_dir(
                     f"stderr: {stderr}\nstdout: {proc.stdout}"
                 )
                 logger.error(error_msg)
+
+    except subprocess.TimeoutExpired as e:
+        error_msg = (
+            f"Boltz subprocess timed out after {timeout}s. "
+            f"Likely GPU memory deadlock from too many concurrent workers. "
+            f"Reduce num_boltz_workers or increase timeout."
+        )
+        returncode = -2
+        logger.error(error_msg)
 
     except Exception as e:
         error_msg = str(e)

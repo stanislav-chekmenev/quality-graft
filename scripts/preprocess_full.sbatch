@@ -2,7 +2,7 @@
 #SBATCH --job-name=make_full_ds
 #SBATCH --partition=h100
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:h100:nvl:1
+#SBATCH --gres=gpu:h100nvl:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
@@ -37,13 +37,14 @@ python "$PROJECT_ROOT/scripts/train.py" \
     mode=preprocess \
     data.data_dir="$SCRATCH_DIR" \
     data.selector_num_workers=32 \
-    data.boltz.num_boltz_workers=20 \
+    data.boltz.num_boltz_workers=10 \
     data.boltz.chunk_size=10 \
+    data.boltz.timeout_per_structure=300 \
     training.max_length=128
 
 # Copy results to my data dir in the Bronstein group
 echo "Copying results to group data directory..."
-GROUP_DATA_DIR="/mnt/labs/bronstein/schekmenev"
+GROUP_DATA_DIR="/mnt/labs/data/bronstein"
 
 mkdir -p "$GROUP_DATA_DIR"
 cp -r "$SCRATCH_DIR" "$GROUP_DATA_DIR/"

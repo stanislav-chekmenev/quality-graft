@@ -183,6 +183,9 @@ class QualityGraftDataModule(PDBLightningDataModule):
             return
 
         # Build boltz config kwargs (only keys accepted by run_boltz_predict_dir)
+        timeout_per_structure = self.boltz_config.get("timeout_per_structure", 300)
+        chunk_timeout = chunk_size * timeout_per_structure + 120  # +120s for model loading
+
         boltz_kwargs = {
             "model": self.boltz_config.get("model", "boltz1"),
             "devices": self.boltz_config.get("devices", 1),
@@ -191,6 +194,7 @@ class QualityGraftDataModule(PDBLightningDataModule):
             "sampling_steps": self.boltz_config.get("sampling_steps", 200),
             "recycling_steps": self.boltz_config.get("recycling_steps", 3),
             "use_msa_server": self.boltz_config.get("use_msa_server", False),
+            "timeout": chunk_timeout,
         }
 
         # Phase 2: Submit chunks to thread pool
