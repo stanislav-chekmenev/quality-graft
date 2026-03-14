@@ -182,23 +182,35 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
 
     # Callbacks
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ckpt_cfg = train_cfg.get("checkpoint", {})
+    ckpt_monitor = ckpt_cfg.get("monitor", "val/plddt_accuracy")
+    ckpt_mode = ckpt_cfg.get("mode", "max")
+    ckpt_save_top_k = ckpt_cfg.get("save_top_k", 3)
+
+    # Build filename from monitor name
+    metric_short = ckpt_monitor.replace("val/", "").replace("plddt_", "")
     callbacks = [
         ModelCheckpoint(
             dirpath=f"{train_cfg.checkpoint_dir}/{run_timestamp}",
-            monitor="val/plddt_accuracy",
-            mode="max",
-            save_top_k=3,
-            filename="epoch{epoch:02d}-val_acc{val/plddt_accuracy:.4f}",
+            monitor=ckpt_monitor,
+            mode=ckpt_mode,
+            save_top_k=ckpt_save_top_k,
+            filename=f"epoch{{epoch:02d}}-{metric_short}{{{ckpt_monitor}:.4f}}",
             auto_insert_metric_name=False,
-        ),
-        EarlyStopping(
-            monitor="val/plddt_accuracy",
-            mode="max",
-            patience=5,
-            verbose=True,
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
+
+    es_cfg = train_cfg.get("early_stopping", {})
+    if es_cfg.get("enabled", False):
+        callbacks.append(
+            EarlyStopping(
+                monitor=es_cfg.get("monitor", ckpt_monitor),
+                mode=es_cfg.get("mode", ckpt_mode),
+                patience=es_cfg.get("patience", 5),
+                verbose=True,
+            )
+        )
 
     return L.Trainer(
         max_epochs=train_cfg.max_epochs,
