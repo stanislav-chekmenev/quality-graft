@@ -297,6 +297,7 @@ def run_boltz_predict_dir(
     recycling_steps: int = 3,
     use_msa_server: bool = False,
     timeout: int | None = None,
+    cuda_device: int | None = None,
 ) -> BoltzBatchResult:
     """Run boltz predict on a directory of YAMLs and collect results.
 
@@ -316,6 +317,8 @@ def run_boltz_predict_dir(
         recycling_steps: Number of recycling steps.
         use_msa_server: Whether to use the MSA server.
         timeout: Max seconds to wait for the subprocess. None means no limit.
+        cuda_device: If set, inject CUDA_VISIBLE_DEVICES=str(cuda_device) into
+            the subprocess environment to pin this worker to a specific GPU.
 
     Returns:
         BoltzBatchResult with per-structure results for outputs found.
@@ -346,6 +349,8 @@ def run_boltz_predict_dir(
 
     try:
         env = _clean_env_for_boltz()
+        if cuda_device is not None:
+            env["CUDA_VISIBLE_DEVICES"] = str(cuda_device)
         proc = subprocess.run(
             cmd, capture_output=True, text=True, check=False, env=env,
             timeout=timeout,
