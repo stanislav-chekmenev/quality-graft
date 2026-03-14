@@ -31,6 +31,13 @@ mkdir -p "$SCRATCH_DIR"
 
 echo "Data directory: $SCRATCH_DIR"
 
+# Stage model weights to fast scratch (for follow-up train jobs)
+CKPT_SCRATCH="/netscratch/schekmenev/ckpt"
+mkdir -p "$CKPT_SCRATCH"
+echo "Staging model weights to $CKPT_SCRATCH..."
+cp -v "$PROJECT_ROOT/ckpt/"*.ckpt "$CKPT_SCRATCH/" 2>/dev/null || echo "No ckpt files to stage (ok for preprocess-only)"
+echo "Weight staging complete."
+
 # --- Run full preprocessing ---
 echo "Starting full preprocessing..."
 python "$PROJECT_ROOT/scripts/train.py" \
