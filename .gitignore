@@ -2,7 +2,6 @@
 .kilocode/
 .INSTRUCTIONS.md
 .claude
-docs
 
 # Cktps
 ckpt/
@@ -13,6 +12,7 @@ ckpt/
 # Logging
 wandb
 wandb_*
+logs
 
 # Outputs
 outputs

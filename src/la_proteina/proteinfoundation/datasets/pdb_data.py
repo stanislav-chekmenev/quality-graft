@@ -25,6 +25,12 @@ from graphein.ml.datasets import PDBManager
 from graphein.protein.tensor.io import protein_to_pyg
 from graphein.protein.utils import download_pdb_multiprocessing
 
+# Ligand Expo (ligand-expo.rcsb.org) has been permanently shut down by RCSB.
+# The download URL now returns HTML instead of data, crashing _parse_ligand_map.
+# This project does not use ligand metadata, so return an empty map.
+PDBManager._parse_ligand_map = lambda self: {}
+PDBManager._download_ligand_map = lambda self: None
+
 
 class PDBDataSelector:
     def __init__(

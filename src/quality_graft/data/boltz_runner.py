@@ -20,16 +20,29 @@ import numpy as np
 def _clean_env_for_boltz() -> dict[str, str]:
     """Return a copy of os.environ with PYTHONPATH entries that contain
     our vendored ``src/boltz/`` removed, so the pip-installed ``boltz``
-    package is found instead."""
+    package is found instead.  Also ensures the pip-installed NVIDIA
+    cuBLAS libraries are on LD_LIBRARY_PATH so cuequivariance_ops can
+    find them."""
     env = os.environ.copy()
     pythonpath = env.get("PYTHONPATH", "")
-    if not pythonpath:
-        return env
-    cleaned = [
-        p for p in pythonpath.split(os.pathsep)
-        if not (Path(p) / "boltz").is_dir()
-    ]
-    env["PYTHONPATH"] = os.pathsep.join(cleaned)
+    if pythonpath:
+        cleaned = [
+            p for p in pythonpath.split(os.pathsep)
+            if not (Path(p) / "boltz").is_dir()
+        ]
+        env["PYTHONPATH"] = os.pathsep.join(cleaned)
+
+    # cuequivariance_ops links against libcublas.so.12 which lives in the
+    # pip nvidia-cublas-cu12 package, not on the default library path.
+    try:
+        import nvidia.cublas.lib as _cublas_lib
+        cublas_dir = str(Path(_cublas_lib.__file__).parent)
+        ld_path = env.get("LD_LIBRARY_PATH", "")
+        if cublas_dir not in ld_path:
+            env["LD_LIBRARY_PATH"] = cublas_dir + (os.pathsep + ld_path if ld_path else "")
+    except ImportError:
+        pass
+
     return env
 
 
@@ -42,6 +55,16 @@ class BoltzResult:
     confidence_json: dict | None  # Full confidence summary
     success: bool
     error_msg: str | None
+
+
+@dataclass
+class BoltzBatchResult:
+    """Result of a batch Boltz prediction run on a directory of YAMLs."""
+
+    results: dict[str, BoltzResult]  # structure_id -> result, for outputs found
+    n_submitted: int  # number of YAMLs in the input directory
+    returncode: int  # subprocess exit code
+    error_msg: str | None  # stderr summary if non-zero exit
 
 
 def build_boltz_command(
@@ -260,3 +283,157 @@ def run_boltz_predict(
             success=False,
             error_msg=str(e),
         )
+
+
+def run_boltz_predict_dir(
+    input_dir: Path,
+    out_dir: Path,
+    structure_ids: list[str],
+    model: str = "boltz1",
+    devices: int = 1,
+    accelerator: str = "gpu",
+    diffusion_samples: int = 1,
+    sampling_steps: int = 200,
+    recycling_steps: int = 3,
+    use_msa_server: bool = False,
+    timeout: int | None = None,
+) -> BoltzBatchResult:
+    """Run boltz predict on a directory of YAMLs and collect results.
+
+    Passes the entire input_dir to a single `boltz predict` invocation.
+    After the subprocess finishes (or crashes), iterates over structure_ids
+    and collects whatever pLDDT outputs exist.
+
+    Args:
+        input_dir: Directory containing YAML files for Boltz.
+        out_dir: Directory where Boltz writes prediction outputs.
+        structure_ids: List of structure IDs to collect results for.
+        model: Model name (default: "boltz1").
+        devices: Number of devices to use.
+        accelerator: Accelerator type ("gpu" or "cpu").
+        diffusion_samples: Number of diffusion samples.
+        sampling_steps: Number of sampling steps.
+        recycling_steps: Number of recycling steps.
+        use_msa_server: Whether to use the MSA server.
+        timeout: Max seconds to wait for the subprocess. None means no limit.
+
+    Returns:
+        BoltzBatchResult with per-structure results for outputs found.
+    """
+    n_submitted = len(structure_ids)
+
+    if n_submitted == 0:
+        logger.info("No structures to process, skipping Boltz subprocess.")
+        return BoltzBatchResult(results={}, n_submitted=0, returncode=0, error_msg=None)
+
+    cmd = build_boltz_command(
+        yaml_path=input_dir,
+        out_dir=out_dir,
+        model=model,
+        devices=devices,
+        accelerator=accelerator,
+        diffusion_samples=diffusion_samples,
+        sampling_steps=sampling_steps,
+        recycling_steps=recycling_steps,
+        use_msa_server=use_msa_server,
+        override=False,
+    )
+
+    logger.info("Running Boltz on directory ({} structures): {}", n_submitted, " ".join(cmd))
+
+    error_msg = None
+    returncode = 0
+
+    try:
+        env = _clean_env_for_boltz()
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, env=env,
+            timeout=timeout,
+        )
+        returncode = proc.returncode
+
+        # Always log subprocess output for debuggability
+        if proc.stdout.strip():
+            logger.debug("Boltz stdout:\n{}", proc.stdout[-2000:])
+
+        if returncode != 0:
+            stderr = proc.stderr
+            if "CUDA out of memory" in stderr or "OutOfMemoryError" in stderr:
+                error_msg = (
+                    f"Boltz OOM: GPU memory exhaustion during batch prediction. "
+                    f"Re-run to process remaining structures, or reduce max_length / increase GPU memory.\n"
+                    f"stderr: {stderr[-500:]}"
+                )
+                logger.error(error_msg)
+            else:
+                error_msg = (
+                    f"Boltz failed with return code {returncode}\n"
+                    f"stderr: {stderr}\nstdout: {proc.stdout}"
+                )
+                logger.error(error_msg)
+
+    except subprocess.TimeoutExpired as e:
+        error_msg = (
+            f"Boltz subprocess timed out after {timeout}s. "
+            f"Likely GPU memory deadlock from too many concurrent workers. "
+            f"Reduce num_boltz_workers or increase timeout."
+        )
+        returncode = -2
+        logger.error(error_msg)
+
+    except Exception as e:
+        error_msg = str(e)
+        returncode = -1
+        logger.error("Boltz subprocess exception: {}", e)
+
+    # Collect results for whatever outputs exist.
+    # In directory mode, Boltz nests output under boltz_results_{input_dir_name}/
+    # so try that first, then fall back to out_dir directly.
+    boltz_results_dir = out_dir / f"boltz_results_{input_dir.name}"
+    lookup_dir = boltz_results_dir if boltz_results_dir.is_dir() else out_dir
+
+    if lookup_dir != out_dir:
+        logger.debug("Using Boltz results directory: {}", lookup_dir)
+
+    results: dict[str, BoltzResult] = {}
+    for sid in structure_ids:
+        npz_path = find_plddt_npz(lookup_dir, sid)
+        if npz_path is None:
+            logger.warning(
+                "[{}] pLDDT output not found under {}. "
+                "Boltz may have skipped or failed this structure silently.",
+                sid, lookup_dir,
+            )
+            continue
+
+        plddt = np.load(npz_path)["plddt"]
+
+        conf_json = None
+        json_path = find_confidence_json(lookup_dir, sid)
+        if json_path is not None:
+            with open(json_path) as f:
+                conf_json = json.load(f)
+
+        results[sid] = BoltzResult(
+            structure_id=sid,
+            plddt=plddt,
+            confidence_json=conf_json,
+            success=True,
+            error_msg=None,
+        )
+
+    n_found = len(results)
+    if error_msg and n_found > 0:
+        error_msg += f"\n{n_found} of {n_submitted} structures completed before failure."
+
+    logger.info(
+        "Boltz batch complete: {}/{} structures produced pLDDT (returncode={})",
+        n_found, n_submitted, returncode,
+    )
+
+    return BoltzBatchResult(
+        results=results,
+        n_submitted=n_submitted,
+        returncode=returncode,
+        error_msg=error_msg,
+    )

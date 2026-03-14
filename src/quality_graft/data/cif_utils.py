@@ -1,5 +1,8 @@
 """Utilities for parsing mmCIF files and generating Boltz-compatible YAML inputs."""
 
+import gzip
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,7 +37,20 @@ def parse_cif_chains(cif_path: Path) -> list[ChainInfo]:
         ValueError: If no protein chains are found in the file.
     """
     parser = MMCIFParser(QUIET=True)
-    structure = parser.get_structure("structure", str(cif_path))
+
+    # BioPython's MMCIFParser cannot read gzip files directly.
+    # Decompress to a temp file if needed.
+    if str(cif_path).endswith(".gz"):
+        tmp = tempfile.NamedTemporaryFile(suffix=".cif", delete=False)
+        try:
+            with gzip.open(cif_path, "rb") as f_in:
+                shutil.copyfileobj(f_in, tmp)
+            tmp.close()
+            structure = parser.get_structure("structure", tmp.name)
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+    else:
+        structure = parser.get_structure("structure", str(cif_path))
     model = structure[0]
 
     chains: list[ChainInfo] = []

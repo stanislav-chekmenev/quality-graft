@@ -12,9 +12,11 @@ Usage:
 
 from __future__ import annotations
 
+import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import torch
 from loguru import logger
 
@@ -22,7 +24,7 @@ from la_proteina.proteinfoundation.datasets.pdb_data import (
     PDBLightningDataModule,
 )
 from src.la_proteina.proteinfoundation.utils.dense_padding_data_loader import DensePaddingDataLoader
-from quality_graft.data.boltz_runner import run_boltz_predict
+from quality_graft.data.boltz_runner import run_boltz_predict_dir
 from quality_graft.data.cif_utils import parse_cif_chains, chains_to_boltz_yaml
 from quality_graft.data.plddt_utils import plddt_to_bin
 
@@ -99,62 +101,198 @@ class QualityGraftDataModule(PDBLightningDataModule):
         self._run_boltz_pass(file_names)
 
     def _run_boltz_pass(self, file_names: List[str]) -> None:
-        """Run Boltz-1 on structures that don't yet have pLDDT labels."""
+        """Run Boltz-1 on structures that don't yet have pLDDT labels.
+
+        Parallel chunked pipeline:
+          Phase 1: Prepare YAMLs into per-chunk subdirectories
+          Phase 2: ThreadPoolExecutor submits run_boltz_predict_dir per chunk
+          Phase 3: as_completed loop merges pLDDT into .pt files per chunk
+        """
+        num_boltz_workers = self.boltz_config.get("num_boltz_workers", 2)
+        chunk_size = self.boltz_config.get("chunk_size", 10)
+
+        # Phase 1: Clean stale chunk directories
+        for stale in self.boltz_inputs_dir.glob("chunk_*"):
+            if stale.is_dir():
+                shutil.rmtree(stale)
+        for stale in self.boltz_work_dir.glob("chunk_*"):
+            if stale.is_dir():
+                shutil.rmtree(stale)
+
+        # Scan .pt files, skip those with pLDDT already
+        submitted_ids: List[str] = []
         n_skipped = 0
-        n_processed = 0
-        n_failed = 0
 
         for fname in file_names:
             pt_path = self.processed_dir / fname
             graph = torch.load(pt_path, weights_only=False)
 
-            # Skip if already has pLDDT labels
             if hasattr(graph, "plddt_bin") and graph.plddt_bin is not None:
                 n_skipped += 1
                 continue
 
-            # Derive structure ID and find CIF
             structure_id = fname.replace(".pt", "")
-            pdb_code = structure_id.split("_")[0]
-
-            plddt_np = self._run_boltz_for_structure(structure_id, pdb_code)
-
-            if plddt_np is None:
-                n_failed += 1
-                continue
-
-            # Handle residue count mismatch
-            n_residues = graph.coords.shape[0]
-            if plddt_np.shape[0] != n_residues:
-                logger.warning(
-                    "[{}] pLDDT length {} != graph residues {}, skipping.",
-                    structure_id, plddt_np.shape[0], n_residues,
-                )
-                n_failed += 1
-                continue
-
-            # Store labels in graph
-            graph.plddt = torch.tensor(plddt_np, dtype=torch.float32)
-            graph.plddt_bin = plddt_to_bin(graph.plddt, num_bins=self.num_plddt_bins)
-
-            torch.save(graph, pt_path)
-            n_processed += 1
-            logger.info(
-                "[{}] pLDDT saved (mean={:.3f}, {} residues).",
-                structure_id, graph.plddt.mean().item(), n_residues,
-            )
-
+            submitted_ids.append(structure_id)
 
         logger.info(
-            "Boltz pass complete: processed={}, skipped={}, failed={}",
-            n_processed, n_skipped, n_failed,
+            "Phase 1: {} to process, {} skipped (already have pLDDT).",
+            len(submitted_ids), n_skipped,
         )
 
-    def _run_boltz_for_structure(
-        self, structure_id: str, pdb_code: str
-    ) -> Optional[np.ndarray]:
-        """Run Boltz-1 prediction for a single structure."""
-        # Find CIF file
+        if not submitted_ids:
+            logger.info("No structures need Boltz processing. Done.")
+            return
+
+        # Split into chunks and prepare YAMLs into chunk directories
+        chunks: List[List[str]] = []
+        for i in range(0, len(submitted_ids), chunk_size):
+            chunks.append(submitted_ids[i : i + chunk_size])
+
+        n_chunks = len(chunks)
+        logger.info(
+            "Splitting {} structures into {} chunks (chunk_size={}, workers={}).",
+            len(submitted_ids), n_chunks, chunk_size, num_boltz_workers,
+        )
+
+        # Prepare YAMLs into per-chunk input directories
+        chunk_input_dirs: List[Path] = []
+        chunk_output_dirs: List[Path] = []
+        valid_chunks: List[List[str]] = []
+
+        for chunk_idx, chunk_sids in enumerate(chunks):
+            chunk_input_dir = self.boltz_inputs_dir / f"chunk_{chunk_idx:03d}"
+            chunk_input_dir.mkdir(parents=True, exist_ok=True)
+            chunk_output_dir = self.boltz_work_dir / f"chunk_{chunk_idx:03d}"
+            chunk_output_dir.mkdir(parents=True, exist_ok=True)
+
+            chunk_valid_sids = []
+            for sid in chunk_sids:
+                pdb_code = sid.split("_")[0]
+                yaml_path = self._prepare_boltz_yaml(sid, pdb_code, output_dir=chunk_input_dir)
+                if yaml_path is not None:
+                    chunk_valid_sids.append(sid)
+
+            if chunk_valid_sids:
+                chunk_input_dirs.append(chunk_input_dir)
+                chunk_output_dirs.append(chunk_output_dir)
+                valid_chunks.append(chunk_valid_sids)
+
+        n_chunks = len(valid_chunks)
+        if n_chunks == 0:
+            logger.warning("No valid YAMLs produced. Skipping Boltz.")
+            return
+
+        # Build boltz config kwargs (only keys accepted by run_boltz_predict_dir)
+        timeout_per_structure = self.boltz_config.get("timeout_per_structure", 300)
+        chunk_timeout = chunk_size * timeout_per_structure + 120  # +120s for model loading
+
+        boltz_kwargs = {
+            "model": self.boltz_config.get("model", "boltz1"),
+            "devices": self.boltz_config.get("devices", 1),
+            "accelerator": self.boltz_config.get("accelerator", "gpu"),
+            "diffusion_samples": self.boltz_config.get("diffusion_samples", 1),
+            "sampling_steps": self.boltz_config.get("sampling_steps", 200),
+            "recycling_steps": self.boltz_config.get("recycling_steps", 3),
+            "use_msa_server": self.boltz_config.get("use_msa_server", False),
+            "timeout": chunk_timeout,
+        }
+
+        # Phase 2: Submit chunks to thread pool
+        n_labeled = 0
+        n_failed = 0
+        chunks_done = 0
+
+        with ThreadPoolExecutor(max_workers=num_boltz_workers) as executor:
+            future_to_chunk = {}
+            for idx, (chunk_sids, inp_dir, out_dir) in enumerate(
+                zip(valid_chunks, chunk_input_dirs, chunk_output_dirs)
+            ):
+                future = executor.submit(
+                    run_boltz_predict_dir,
+                    input_dir=inp_dir,
+                    out_dir=out_dir,
+                    structure_ids=chunk_sids,
+                    **boltz_kwargs,
+                )
+                future_to_chunk[future] = (idx, chunk_sids)
+
+            # Phase 3: Collect results as they complete
+            for future in as_completed(future_to_chunk):
+                chunk_idx, chunk_sids = future_to_chunk[future]
+                chunks_done += 1
+
+                try:
+                    batch_result = future.result()
+                except Exception as e:
+                    logger.error("Chunk {} raised exception: {}", chunk_idx, e)
+                    n_failed += len(chunk_sids)
+                    continue
+
+                # Check for OOM (boltz_runner formats OOM as "Boltz OOM: GPU memory exhaustion...")
+                if batch_result.returncode != 0 and batch_result.error_msg:
+                    if "OOM" in batch_result.error_msg or "out of memory" in batch_result.error_msg.lower():
+                        partial = len(batch_result.results)
+                        logger.error(
+                            "Chunk OOM: {}/{} structures completed before GPU memory exhaustion. "
+                            "Will retry on re-run.",
+                            partial, len(chunk_sids),
+                        )
+
+                # Merge pLDDT into .pt files for this chunk
+                chunk_labeled = 0
+                chunk_failed = 0
+
+                for sid in chunk_sids:
+                    boltz_result = batch_result.results.get(sid)
+                    if boltz_result is None or boltz_result.plddt is None:
+                        chunk_failed += 1
+                        continue
+
+                    fname = f"{sid}.pt"
+                    pt_path = self.processed_dir / fname
+                    graph = torch.load(pt_path, weights_only=False)
+
+                    plddt_np = boltz_result.plddt
+                    n_residues = graph.coords.shape[0]
+                    if plddt_np.shape[0] != n_residues:
+                        logger.warning(
+                            "[{}] pLDDT length {} != graph residues {}, skipping.",
+                            sid, plddt_np.shape[0], n_residues,
+                        )
+                        chunk_failed += 1
+                        continue
+
+                    graph.plddt = torch.tensor(plddt_np, dtype=torch.float32)
+                    graph.plddt_bin = plddt_to_bin(graph.plddt, num_bins=self.num_plddt_bins)
+                    torch.save(graph, pt_path)
+                    chunk_labeled += 1
+
+                n_labeled += chunk_labeled
+                n_failed += chunk_failed
+
+                logger.info(
+                    "Chunks done: {}/{} | total labeled: {}/{} ({:.1f}%) | "
+                    "this chunk: {}/{} succeeded, {} failed",
+                    chunks_done, n_chunks,
+                    n_labeled, len(submitted_ids),
+                    100.0 * n_labeled / len(submitted_ids),
+                    chunk_labeled, len(chunk_sids), chunk_failed,
+                )
+
+        logger.info(
+            "Boltz parallel pass complete: {}/{} labeled, {} failed, {} skipped "
+            "(already had pLDDT) | {} chunks, {} workers",
+            n_labeled, len(submitted_ids), n_failed, n_skipped,
+            n_chunks, num_boltz_workers,
+        )
+
+    def _prepare_boltz_yaml(
+        self, structure_id: str, pdb_code: str, output_dir: Optional[Path] = None,
+    ) -> Optional[Path]:
+        """Parse CIF and write Boltz input YAML. Returns yaml_path or None on failure."""
+        if output_dir is None:
+            output_dir = self.boltz_inputs_dir
+
         cif_path = self.raw_dir / f"{pdb_code}.{self.format}"
         if not cif_path.exists():
             gz_path = cif_path.with_suffix(f".{self.format}.gz")
@@ -170,28 +308,8 @@ class QualityGraftDataModule(PDBLightningDataModule):
             logger.warning("[{}] CIF parse failed: {}", structure_id, e)
             return None
 
-        # Generate Boltz YAML
         use_msa = self.boltz_config.get("use_msa_server", False)
         yaml_content = chains_to_boltz_yaml(chains, use_msa=use_msa)
-        yaml_path = self.boltz_inputs_dir / f"{structure_id}.yaml"
+        yaml_path = output_dir / f"{structure_id}.yaml"
         yaml_path.write_text(yaml_content)
-
-        # Run Boltz
-        result = run_boltz_predict(
-            yaml_path=yaml_path,
-            out_dir=self.boltz_work_dir,
-            model=self.boltz_config.get("model", "boltz1"),
-            devices=self.boltz_config.get("devices", 1),
-            accelerator=self.boltz_config.get("accelerator", "gpu"),
-            diffusion_samples=self.boltz_config.get("diffusion_samples", 1),
-            sampling_steps=self.boltz_config.get("sampling_steps", 200),
-            recycling_steps=self.boltz_config.get("recycling_steps", 3),
-            use_msa_server=use_msa,
-            override=False,
-        )
-
-        if not result.success or result.plddt is None:
-            logger.warning("[{}] Boltz failed: {}", structure_id, result.error_msg)
-            return None
-
-        return result.plddt
+        return yaml_path
