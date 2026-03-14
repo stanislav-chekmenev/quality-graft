@@ -192,6 +192,8 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
         max_epochs=train_cfg.max_epochs,
         precision=train_cfg.precision,
         accelerator=train_cfg.get("accelerator", "auto"),
+        devices=train_cfg.get("devices", 1),
+        strategy=train_cfg.get("strategy", "auto"),
         gradient_clip_val=train_cfg.gradient_clip_val,
         accumulate_grad_batches=train_cfg.accumulate_grad_batches,
         log_every_n_steps=train_cfg.get("log_every_n_steps", 50),

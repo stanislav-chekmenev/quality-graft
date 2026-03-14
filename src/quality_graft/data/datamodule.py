@@ -62,6 +62,40 @@ class QualityGraftDataModule(PDBLightningDataModule):
 
     def setup(self, stage=None):
         super().setup(stage)
+
+        # Filter splits to only include structures that have pLDDT labels.
+        # Structures where Boltz failed/timed out during preprocessing will
+        # have .pt files on disk but no plddt_bin attribute — these would
+        # crash training_step.
+        if stage in ("fit", None) and self.dfs_splits is not None:
+            for split_name in list(self.dfs_splits.keys()):
+                df = self.dfs_splits[split_name]
+                has_plddt = []
+                for _, row in df.iterrows():
+                    pdb = row["pdb"]
+                    chain = row.get("chain")
+                    fname = f"{pdb}_{chain}.pt" if chain else f"{pdb}.pt"
+                    pt_path = self.processed_dir / fname
+                    if pt_path.exists():
+                        graph = torch.load(pt_path, weights_only=False)
+                        has_plddt.append(
+                            hasattr(graph, "plddt_bin") and graph.plddt_bin is not None
+                        )
+                    else:
+                        has_plddt.append(False)
+                before = len(df)
+                self.dfs_splits[split_name] = df[has_plddt].reset_index(drop=True)
+                after = len(self.dfs_splits[split_name])
+                if before != after:
+                    logger.warning(
+                        "Filtered {} split: {}/{} structures have pLDDT labels.",
+                        split_name, after, before,
+                    )
+
+            # Rebuild datasets with filtered splits
+            self.train_ds = self._get_dataset("train")
+            self.val_ds = self._get_dataset("val")
+
         if stage in ("fit", None):
             if self.val_ds is not None and len(self.val_ds) == 0:
                 logger.warning(
