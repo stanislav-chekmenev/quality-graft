@@ -51,6 +51,13 @@ if [ "$N_PT" -eq 0 ]; then
     exit 1
 fi
 
+# Stage model weights to node-local scratch
+CKPT_DIR="/scratch/schekmenev/ckpt"
+mkdir -p "$CKPT_DIR"
+echo "Staging model weights to $CKPT_DIR..."
+cp -v "$PROJECT_ROOT/ckpt/"*.ckpt "$CKPT_DIR/"
+echo "Weight staging complete."
+
 # --- Run training ---
 # CUDA_LAUNCH_BLOCKING=1 gives exact error location for CUDA asserts
 export CUDA_LAUNCH_BLOCKING=1
@@ -67,8 +74,11 @@ srun python "$PROJECT_ROOT/scripts/train.py" \
     training.devices=$NUM_DEVICES \
     training.strategy=ddp \
     training.precision=bf16-mixed \
-    training.max_epochs=250 \
-    training.check_val_every_n_epoch=10
+    training.max_epochs=100 \
+    training.check_val_every_n_epoch=10 \
+    model.la_proteina_wrapper.proteina_ckpt_path="$CKPT_DIR/LD1_ucond_notri_512.ckpt" \
+    model.la_proteina_wrapper.autoencoder_ckpt_path="$CKPT_DIR/AE1_ucond_512.ckpt" \
+    model.confidence_head.ckpt_path="$CKPT_DIR/boltz1_conf.ckpt"
 
 echo "==========================================="
 echo "Job completed: $(date)"
