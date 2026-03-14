@@ -23,7 +23,7 @@ import os
 
 import hydra
 import lightning as L
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
 from omegaconf import DictConfig, OmegaConf
 
@@ -185,11 +185,17 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
     callbacks = [
         ModelCheckpoint(
             dirpath=f"{train_cfg.checkpoint_dir}/{run_timestamp}",
-            monitor="val/loss",
-            mode="min",
+            monitor="val/plddt_accuracy",
+            mode="max",
             save_top_k=3,
-            filename="epoch{epoch:02d}-val_loss{val/loss:.4f}",
+            filename="epoch{epoch:02d}-val_acc{val/plddt_accuracy:.4f}",
             auto_insert_metric_name=False,
+        ),
+        EarlyStopping(
+            monitor="val/plddt_accuracy",
+            mode="max",
+            patience=5,
+            verbose=True,
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
