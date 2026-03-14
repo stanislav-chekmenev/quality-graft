@@ -212,6 +212,7 @@ class QualityGraftDataModule(PDBLightningDataModule):
         """
         num_boltz_workers = self.boltz_config.get("num_boltz_workers", 2)
         chunk_size = self.boltz_config.get("chunk_size", 10)
+        num_devices = self.boltz_config.get("num_devices", 1)
 
         # Phase 1: Clean stale chunk directories
         for stale in self.boltz_inputs_dir.glob("chunk_*"):
@@ -309,11 +310,14 @@ class QualityGraftDataModule(PDBLightningDataModule):
             for idx, (chunk_sids, inp_dir, out_dir) in enumerate(
                 zip(valid_chunks, chunk_input_dirs, chunk_output_dirs)
             ):
+                # Round-robin GPU assignment
+                cuda_device = idx % num_devices if num_devices > 1 else None
                 future = executor.submit(
                     run_boltz_predict_dir,
                     input_dir=inp_dir,
                     out_dir=out_dir,
                     structure_ids=chunk_sids,
+                    cuda_device=cuda_device,
                     **boltz_kwargs,
                 )
                 future_to_chunk[future] = (idx, chunk_sids)

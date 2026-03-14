@@ -28,3 +28,4 @@ boltz:
   accelerator: gpu
   use_msa_server: false
   timeout_per_structure: 300  # seconds; chunk timeout = chunk_size * this + 120s
+  num_devices: 1  # Number of GPUs for parallel preprocessing
