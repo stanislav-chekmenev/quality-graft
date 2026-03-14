@@ -1,7 +1,7 @@
 _target_: quality_graft.models.confidence_head.BoltzConfidenceHead
 
 # Runtime
-device: cpu
+device: gpu
 freeze: true
 strict_loading: true
 ckpt_path: ckpt/boltz1_conf.ckpt

@@ -52,22 +52,109 @@ class QualityGraftDataModule(PDBLightningDataModule):
         self,
         boltz_config: Dict[str, Any],
         num_plddt_bins: int = 50,
+        local_only: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.boltz_config = boltz_config
         self.num_plddt_bins = num_plddt_bins
+        self.local_only = local_only
         self.boltz_work_dir = self.data_dir / "boltz_work"
         self.boltz_inputs_dir = self.boltz_work_dir / "inputs"
 
     def setup(self, stage=None):
-        super().setup(stage)
+        if self.local_only:
+            self._setup_local_only(stage)
+        else:
+            super().setup(stage)
+
+        # Filter splits to only include structures that have pLDDT labels.
+        # Structures where Boltz failed/timed out during preprocessing will
+        # have .pt files on disk but no plddt_bin attribute — these would
+        # crash training_step.
+        if stage in ("fit", None) and self.dfs_splits is not None:
+            for split_name in list(self.dfs_splits.keys()):
+                df = self.dfs_splits[split_name]
+                has_plddt = []
+                for _, row in df.iterrows():
+                    pdb = row["pdb"]
+                    chain = row.get("chain")
+                    fname = f"{pdb}_{chain}.pt" if chain else f"{pdb}.pt"
+                    pt_path = self.processed_dir / fname
+                    if pt_path.exists():
+                        graph = torch.load(pt_path, weights_only=False)
+                        has_plddt.append(
+                            hasattr(graph, "plddt_bin") and graph.plddt_bin is not None
+                        )
+                    else:
+                        has_plddt.append(False)
+                before = len(df)
+                self.dfs_splits[split_name] = df[has_plddt].reset_index(drop=True)
+                after = len(self.dfs_splits[split_name])
+                if before != after:
+                    logger.warning(
+                        "Filtered {} split: {}/{} structures have pLDDT labels.",
+                        split_name, after, before,
+                    )
+
+            # Rebuild datasets with filtered splits
+            self.train_ds = self._get_dataset("train")
+            self.val_ds = self._get_dataset("val")
+
         if stage in ("fit", None):
             if self.val_ds is not None and len(self.val_ds) == 0:
                 logger.warning(
                     "Val split is empty. Using train split for validation (debug mode)."
                 )
                 self.val_ds = self.train_ds
+
+    def _setup_local_only(self, stage=None):
+        """Setup for local_only mode: build DataFrame from .pt files, skip CSV.
+
+        Only includes .pt files that already have pLDDT labels (plddt_bin),
+        since files without labels would be filtered out later and would
+        crash training_step.
+        """
+        import pandas as pd
+
+        # Build DataFrame from .pt filenames, keeping only files with pLDDT
+        pt_files = sorted(self.processed_dir.glob("*.pt"))
+        records = []
+        n_skipped = 0
+        for pt in pt_files:
+            graph = torch.load(pt, weights_only=False)
+            if not (hasattr(graph, "plddt_bin") and graph.plddt_bin is not None):
+                n_skipped += 1
+                continue
+            stem = pt.stem  # e.g. "1abc_A" or "1abc"
+            parts = stem.split("_", 1)
+            pdb = parts[0]
+            chain = parts[1] if len(parts) > 1 else None
+            records.append({"pdb": pdb, "chain": chain, "id": stem})
+        if not records:
+            raise RuntimeError(
+                f"local_only=True but 0/{len(pt_files)} .pt files in "
+                f"{self.processed_dir} have pLDDT labels. "
+                "Run preprocessing (mode=preprocess) first."
+            )
+        self.df_data = pd.DataFrame(records)
+        logger.info(
+            "local_only: {} .pt files with pLDDT ({} skipped without labels, "
+            "{} total on disk)",
+            len(records), n_skipped, len(pt_files),
+        )
+
+        # Split using the existing datasplitter
+        file_identifier = self.data_dir.name
+        (self.dfs_splits, self.clusterid_to_seqid_mappings) = (
+            self.datasplitter.split_data(self.df_data, file_identifier)
+        )
+
+        if stage == "fit" or stage is None:
+            self.train_ds = self._get_dataset("train")
+            self.val_ds = self._get_dataset("val")
+        elif stage == "test":
+            self.test_ds = self._get_dataset("test")
 
     def val_dataloader(self):
         if self.val_ds is None:
@@ -83,6 +170,21 @@ class QualityGraftDataModule(PDBLightningDataModule):
 
     def prepare_data(self):
         """Two-pass preprocessing: PyG conversion then Boltz-1 pLDDT labels."""
+        if self.local_only:
+            # Data already preprocessed — skip all preprocessing.
+            # setup() will filter out structures without pLDDT labels.
+            if not self.processed_dir.exists() or not any(self.processed_dir.glob("*.pt")):
+                raise RuntimeError(
+                    f"local_only=True but no .pt files found in {self.processed_dir}. "
+                    "Run preprocessing first."
+                )
+            logger.info(
+                "local_only=True: skipping prepare_data entirely, "
+                "{} .pt files in {}",
+                len(list(self.processed_dir.glob("*.pt"))), self.processed_dir,
+            )
+            return
+
         # Pass 1: parent handles filtering, download, PyG conversion
         super().prepare_data()
 

@@ -16,8 +16,8 @@ target_s_dim: 384
 target_z_dim: 128
 
 # Attention refinement layers (0 = linear projection only)
-n_attn_layers: 2
-num_heads: 16
+n_attn_layers: 1
+num_heads: 8
 
 # Transition FFN expansion factors
 s_ff_factor: 2
