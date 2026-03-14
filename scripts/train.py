@@ -19,10 +19,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import os
+
 import hydra
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
-from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.loggers import WandbLogger, CSVLogger
 from omegaconf import DictConfig, OmegaConf
 
 # Ensure project paths are importable
@@ -102,6 +104,7 @@ def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
         batch_size=data_cfg.batch_size,
         num_workers=data_cfg.num_workers,
         transforms=transforms,
+        local_only=data_cfg.get("local_only", False),
     )
 
 
@@ -166,7 +169,10 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
     """Build the Lightning Trainer."""
     train_cfg = cfg.training
 
-    # W&B logger
+    # W&B logger — disable on non-rank-0 to avoid DDP deadlock under srun
+    local_rank = int(os.environ.get("SLURM_LOCALID", os.environ.get("LOCAL_RANK", 0)))
+    if local_rank != 0:
+        os.environ["WANDB_MODE"] = "disabled"
     wandb_logger = WandbLogger(
         project=train_cfg.wandb.project,
         entity=train_cfg.wandb.entity,
@@ -208,6 +214,9 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
 def main(cfg: DictConfig) -> None:
     """Main entry point."""
     logging.basicConfig(level=logging.INFO)
+
+    import torch
+    torch.set_float32_matmul_precision("high")
 
     mode = cfg.get("mode", "train")
 
@@ -268,7 +277,10 @@ def main(cfg: DictConfig) -> None:
             model.num_frozen_parameters(),
         )
 
+        rank = int(os.environ.get("SLURM_PROCID", 0))
+        print(f"[RANK {rank}] Calling trainer.fit()...", flush=True)
         trainer.fit(lit_module, datamodule=dm)
+        print(f"[RANK {rank}] trainer.fit() returned.", flush=True)
     else:
         raise ValueError(f"Unknown mode: {mode}. Use 'preprocess' or 'train'.")
 

@@ -111,6 +111,7 @@ class QualityGraftLightningModule(L.LightningModule):
             plddt_logits.reshape(-1, self.num_plddt_bins),
             plddt_labels.reshape(-1),
             reduction="none",
+            ignore_index=-1,
         )
         loss = loss.view_as(plddt_labels) * mask
         return loss.sum() / mask.sum().clamp(min=1)

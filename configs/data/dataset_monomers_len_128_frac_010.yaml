@@ -10,14 +10,14 @@ molecule_type: protein
 oligomeric_min: 1
 oligomeric_max: 1
 format: cif
-local_only: false
+local_only: true
 num_plddt_bins: 50
 train_val_test: [0.8, 0.15, 0.05]
 batch_size: ${training.batch_size}
 num_workers: ${training.num_workers}
 
 # PDBDataSelector filtering params
-fraction: 0.20
+fraction: 0.10
 worst_resolution: 2.5
 best_resolution: null
 experiment_types: ["diffraction", "EM"]
