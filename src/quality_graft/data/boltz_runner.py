@@ -78,6 +78,9 @@ def build_boltz_command(
     recycling_steps: int = 3,
     use_msa_server: bool = False,
     override: bool = False,
+    num_workers: int = 2,
+    preprocessing_threads: int | None = None,
+    max_parallel_samples: int | None = None,
 ) -> list[str]:
     """Build the boltz predict CLI command as a list of strings.
 
@@ -92,6 +95,9 @@ def build_boltz_command(
         recycling_steps: Number of recycling steps.
         use_msa_server: Whether to use the MSA server.
         override: Whether to override existing results.
+        num_workers: Number of Boltz dataloader workers.
+        preprocessing_threads: Number of Boltz preprocessing threads (None = Boltz default).
+        max_parallel_samples: Max diffusion samples processed in parallel (None = Boltz default of 5).
 
     Returns:
         Command as a list of strings suitable for subprocess.run().
@@ -114,7 +120,15 @@ def build_boltz_command(
         str(sampling_steps),
         "--recycling_steps",
         str(recycling_steps),
+        "--num_workers",
+        str(num_workers),
     ]
+
+    if preprocessing_threads is not None:
+        cmd.extend(["--preprocessing-threads", str(preprocessing_threads)])
+
+    if max_parallel_samples is not None:
+        cmd.extend(["--max_parallel_samples", str(max_parallel_samples)])
 
     if use_msa_server:
         cmd.append("--use_msa_server")
