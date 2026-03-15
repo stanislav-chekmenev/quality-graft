@@ -320,28 +320,32 @@ def run_boltz_predict_dir(
     recycling_steps: int = 3,
     use_msa_server: bool = False,
     timeout: int | None = None,
-    cuda_device: int | None = None,
+    num_workers: int = 2,
+    preprocessing_threads: int | None = None,
+    max_parallel_samples: int | None = None,
 ) -> BoltzBatchResult:
     """Run boltz predict on a directory of YAMLs and collect results.
 
-    Passes the entire input_dir to a single `boltz predict` invocation.
-    After the subprocess finishes (or crashes), iterates over structure_ids
-    and collects whatever pLDDT outputs exist.
+    Passes the entire input_dir to a single `boltz predict` invocation
+    with native multi-GPU support via --devices. After the subprocess
+    finishes (or crashes), iterates over structure_ids and collects
+    whatever pLDDT outputs exist.
 
     Args:
         input_dir: Directory containing YAML files for Boltz.
         out_dir: Directory where Boltz writes prediction outputs.
         structure_ids: List of structure IDs to collect results for.
         model: Model name (default: "boltz1").
-        devices: Number of devices to use.
+        devices: Number of devices to use (passed as --devices to Boltz).
         accelerator: Accelerator type ("gpu" or "cpu").
         diffusion_samples: Number of diffusion samples.
         sampling_steps: Number of sampling steps.
         recycling_steps: Number of recycling steps.
         use_msa_server: Whether to use the MSA server.
         timeout: Max seconds to wait for the subprocess. None means no limit.
-        cuda_device: If set, inject CUDA_VISIBLE_DEVICES=str(cuda_device) into
-            the subprocess environment to pin this worker to a specific GPU.
+        num_workers: Number of Boltz dataloader workers.
+        preprocessing_threads: Number of Boltz preprocessing threads (None = Boltz default).
+        max_parallel_samples: Max diffusion samples processed in parallel (None = Boltz default of 5).
 
     Returns:
         BoltzBatchResult with per-structure results for outputs found.
@@ -363,6 +367,9 @@ def run_boltz_predict_dir(
         recycling_steps=recycling_steps,
         use_msa_server=use_msa_server,
         override=False,
+        num_workers=num_workers,
+        preprocessing_threads=preprocessing_threads,
+        max_parallel_samples=max_parallel_samples,
     )
 
     logger.info("Running Boltz on directory ({} structures): {}", n_submitted, " ".join(cmd))
@@ -372,8 +379,6 @@ def run_boltz_predict_dir(
 
     try:
         env = _clean_env_for_boltz()
-        if cuda_device is not None:
-            env["CUDA_VISIBLE_DEVICES"] = str(cuda_device)
         proc = subprocess.run(
             cmd, capture_output=True, text=True, check=False, env=env,
             timeout=timeout,
@@ -403,8 +408,7 @@ def run_boltz_predict_dir(
     except subprocess.TimeoutExpired as e:
         error_msg = (
             f"Boltz subprocess timed out after {timeout}s. "
-            f"Likely GPU memory deadlock from too many concurrent workers. "
-            f"Reduce num_boltz_workers or increase timeout."
+            f"Reduce chunk_size or increase timeout."
         )
         returncode = -2
         logger.error(error_msg)
