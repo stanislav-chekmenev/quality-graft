@@ -17,7 +17,7 @@ batch_size: ${training.batch_size}
 num_workers: ${training.num_workers}
 
 # PDBDataSelector filtering params
-fraction: 0.50
+fraction: 1.0
 worst_resolution: 2.5
 best_resolution: null
 experiment_types: ["diffraction", "EM"]
@@ -28,10 +28,11 @@ boltz:
   diffusion_samples: 1
   sampling_steps: 50
   recycling_steps: 1
-  devices: 1
   accelerator: gpu
   use_msa_server: false
-  num_boltz_workers: 2
   chunk_size: 10
   timeout_per_structure: 300  # seconds; chunk timeout = chunk_size * this + 120s
-  num_devices: 1  # Number of GPUs for parallel preprocessing
+  num_devices: 1  # Number of GPUs for Boltz --devices flag
+  num_workers: 2  # Boltz dataloader workers
+  preprocessing_threads: null  # null = Boltz default (cpu_count)
+  max_parallel_samples: null  # null = Boltz default (5)
