@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import csv
 import shutil
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -250,12 +249,12 @@ class QualityGraftDataModule(PDBLightningDataModule):
     def _run_boltz_pass(self, file_names: List[str]) -> None:
         """Run Boltz-1 on structures that don't yet have pLDDT labels.
 
-        Parallel chunked pipeline:
+        Sequential chunked pipeline:
           Phase 1: Prepare YAMLs into per-chunk subdirectories
-          Phase 2: ThreadPoolExecutor submits run_boltz_predict_dir per chunk
-          Phase 3: as_completed loop merges pLDDT into .pt files per chunk
+          Phase 2: Process each chunk sequentially via run_boltz_predict_dir
+                   with native multi-GPU (--devices N)
+          Phase 3: Merge pLDDT into .pt files after each chunk, save CSV
         """
-        num_boltz_workers = self.boltz_config.get("num_boltz_workers", 2)
         chunk_size = self.boltz_config.get("chunk_size", 10)
         num_devices = self.boltz_config.get("num_devices", 1)
 
@@ -297,8 +296,8 @@ class QualityGraftDataModule(PDBLightningDataModule):
 
         n_chunks = len(chunks)
         logger.info(
-            "Splitting {} structures into {} chunks (chunk_size={}, workers={}).",
-            len(submitted_ids), n_chunks, chunk_size, num_boltz_workers,
+            "Splitting {} structures into {} chunks (chunk_size={}, devices={}).",
+            len(submitted_ids), n_chunks, chunk_size, num_devices,
         )
 
         # Prepare YAMLs into per-chunk input directories
@@ -335,117 +334,102 @@ class QualityGraftDataModule(PDBLightningDataModule):
 
         boltz_kwargs = {
             "model": self.boltz_config.get("model", "boltz1"),
-            "devices": self.boltz_config.get("devices", 1),
+            "devices": num_devices,
             "accelerator": self.boltz_config.get("accelerator", "gpu"),
             "diffusion_samples": self.boltz_config.get("diffusion_samples", 1),
             "sampling_steps": self.boltz_config.get("sampling_steps", 200),
             "recycling_steps": self.boltz_config.get("recycling_steps", 3),
             "use_msa_server": self.boltz_config.get("use_msa_server", False),
             "timeout": chunk_timeout,
+            "num_workers": self.boltz_config.get("num_workers", 2),
+            "preprocessing_threads": self.boltz_config.get("preprocessing_threads"),
+            "max_parallel_samples": self.boltz_config.get("max_parallel_samples"),
         }
 
-        # Phase 2: Submit chunks to thread pool
+        # Phase 2: Process chunks sequentially (each uses all GPUs via --devices)
         n_labeled = 0
         n_failed = 0
-        chunks_done = 0
 
-        with ThreadPoolExecutor(max_workers=num_boltz_workers) as executor:
-            future_to_chunk = {}
-            for idx, (chunk_sids, inp_dir, out_dir) in enumerate(
-                zip(valid_chunks, chunk_input_dirs, chunk_output_dirs)
-            ):
-                # Round-robin GPU assignment
-                cuda_device = idx % num_devices if num_devices > 1 else None
-                future = executor.submit(
-                    run_boltz_predict_dir,
+        for chunk_idx, (chunk_sids, inp_dir, out_dir) in enumerate(
+            zip(valid_chunks, chunk_input_dirs, chunk_output_dirs)
+        ):
+            try:
+                batch_result = run_boltz_predict_dir(
                     input_dir=inp_dir,
                     out_dir=out_dir,
                     structure_ids=chunk_sids,
-                    cuda_device=cuda_device,
                     **boltz_kwargs,
                 )
-                future_to_chunk[future] = (idx, chunk_sids)
+            except Exception as e:
+                logger.error("Chunk {} raised exception: {}", chunk_idx, e)
+                n_failed += len(chunk_sids)
+                for sid in chunk_sids:
+                    plddt_status[sid] = False
+                _save_plddt_status(self.plddt_status_path, plddt_status)
+                continue
 
-            # Phase 3: Collect results as they complete
-            for future in as_completed(future_to_chunk):
-                chunk_idx, chunk_sids = future_to_chunk[future]
-                chunks_done += 1
+            # Check for OOM
+            if batch_result.returncode != 0 and batch_result.error_msg:
+                if "OOM" in batch_result.error_msg or "out of memory" in batch_result.error_msg.lower():
+                    partial = len(batch_result.results)
+                    logger.error(
+                        "Chunk OOM: {}/{} structures completed before GPU memory exhaustion. "
+                        "Will retry on re-run.",
+                        partial, len(chunk_sids),
+                    )
 
-                try:
-                    batch_result = future.result()
-                except Exception as e:
-                    logger.error("Chunk {} raised exception: {}", chunk_idx, e)
-                    n_failed += len(chunk_sids)
-                    # Mark as failed (no pLDDT) in status
-                    for sid in chunk_sids:
-                        plddt_status[sid] = False
+            # Phase 3: Merge pLDDT into .pt files for this chunk
+            chunk_labeled = 0
+            chunk_failed = 0
+
+            for sid in chunk_sids:
+                boltz_result = batch_result.results.get(sid)
+                if boltz_result is None or boltz_result.plddt is None:
+                    chunk_failed += 1
+                    plddt_status[sid] = False
                     continue
 
-                # Check for OOM (boltz_runner formats OOM as "Boltz OOM: GPU memory exhaustion...")
-                if batch_result.returncode != 0 and batch_result.error_msg:
-                    if "OOM" in batch_result.error_msg or "out of memory" in batch_result.error_msg.lower():
-                        partial = len(batch_result.results)
-                        logger.error(
-                            "Chunk OOM: {}/{} structures completed before GPU memory exhaustion. "
-                            "Will retry on re-run.",
-                            partial, len(chunk_sids),
-                        )
+                fname = f"{sid}.pt"
+                pt_path = self.processed_dir / fname
+                graph = torch.load(pt_path, weights_only=False)
 
-                # Merge pLDDT into .pt files for this chunk
-                chunk_labeled = 0
-                chunk_failed = 0
+                plddt_np = boltz_result.plddt
+                n_residues = graph.coords.shape[0]
+                if plddt_np.shape[0] != n_residues:
+                    logger.warning(
+                        "[{}] pLDDT length {} != graph residues {}, skipping.",
+                        sid, plddt_np.shape[0], n_residues,
+                    )
+                    chunk_failed += 1
+                    plddt_status[sid] = False
+                    continue
 
-                for sid in chunk_sids:
-                    boltz_result = batch_result.results.get(sid)
-                    if boltz_result is None or boltz_result.plddt is None:
-                        chunk_failed += 1
-                        plddt_status[sid] = False
-                        continue
+                graph.plddt = torch.tensor(plddt_np, dtype=torch.float32)
+                graph.plddt_bin = plddt_to_bin(graph.plddt, num_bins=self.num_plddt_bins)
+                torch.save(graph, pt_path)
+                chunk_labeled += 1
+                plddt_status[sid] = True
 
-                    fname = f"{sid}.pt"
-                    pt_path = self.processed_dir / fname
-                    graph = torch.load(pt_path, weights_only=False)
+            n_labeled += chunk_labeled
+            n_failed += chunk_failed
 
-                    plddt_np = boltz_result.plddt
-                    n_residues = graph.coords.shape[0]
-                    if plddt_np.shape[0] != n_residues:
-                        logger.warning(
-                            "[{}] pLDDT length {} != graph residues {}, skipping.",
-                            sid, plddt_np.shape[0], n_residues,
-                        )
-                        chunk_failed += 1
-                        plddt_status[sid] = False
-                        continue
+            # Save status after each chunk so progress is preserved on crash
+            _save_plddt_status(self.plddt_status_path, plddt_status)
 
-                    graph.plddt = torch.tensor(plddt_np, dtype=torch.float32)
-                    graph.plddt_bin = plddt_to_bin(graph.plddt, num_bins=self.num_plddt_bins)
-                    torch.save(graph, pt_path)
-                    chunk_labeled += 1
-                    plddt_status[sid] = True
-
-                n_labeled += chunk_labeled
-                n_failed += chunk_failed
-
-                # Save status after each chunk so progress is preserved on crash
-                _save_plddt_status(self.plddt_status_path, plddt_status)
-
-                logger.info(
-                    "Chunks done: {}/{} | total labeled: {}/{} ({:.1f}%) | "
-                    "this chunk: {}/{} succeeded, {} failed",
-                    chunks_done, n_chunks,
-                    n_labeled, len(submitted_ids),
-                    100.0 * n_labeled / len(submitted_ids),
-                    chunk_labeled, len(chunk_sids), chunk_failed,
-                )
-
-        # Final save
-        _save_plddt_status(self.plddt_status_path, plddt_status)
+            logger.info(
+                "Chunks done: {}/{} | total labeled: {}/{} ({:.1f}%) | "
+                "this chunk: {}/{} succeeded, {} failed",
+                chunk_idx + 1, n_chunks,
+                n_labeled, len(submitted_ids),
+                100.0 * n_labeled / len(submitted_ids),
+                chunk_labeled, len(chunk_sids), chunk_failed,
+            )
 
         logger.info(
-            "Boltz parallel pass complete: {}/{} labeled, {} failed, {} skipped "
-            "(already had pLDDT) | {} chunks, {} workers",
+            "Boltz pass complete: {}/{} labeled, {} failed, {} skipped "
+            "(already had pLDDT) | {} chunks, {} devices",
             n_labeled, len(submitted_ids), n_failed, n_skipped,
-            n_chunks, num_boltz_workers,
+            n_chunks, num_devices,
         )
 
     def _prepare_boltz_yaml(
