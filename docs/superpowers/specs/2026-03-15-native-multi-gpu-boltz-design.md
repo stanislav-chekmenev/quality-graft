@@ -19,17 +19,18 @@ Use Boltz's native `--devices N` flag to let a single process distribute inferen
 
 ### 1. `src/quality_graft/data/boltz_runner.py`
 
-**`build_boltz_command`** — add two parameters:
+**`build_boltz_command`** — add three parameters:
 - `num_workers: int = 2` → appends `--num_workers <N>` (Boltz dataloader workers)
 - `preprocessing_threads: int | None = None` → appends `--preprocessing-threads <N>` if set (note: CLI flag uses hyphen, Python param uses underscore)
+- `max_parallel_samples: int | None = None` → appends `--max_parallel_samples <N>` if set (controls how many diffusion samples are processed in parallel; helps manage GPU memory)
 
 **`run_boltz_predict_dir`**:
 - Remove `cuda_device` parameter and the `CUDA_VISIBLE_DEVICES` injection logic
-- Add `num_workers: int = 2` and `preprocessing_threads: int | None = None` parameters, forwarded to `build_boltz_command`
+- Add `num_workers: int = 2`, `preprocessing_threads: int | None = None`, and `max_parallel_samples: int | None = None` parameters, forwarded to `build_boltz_command`
 - Update timeout error message: replace "Reduce num_boltz_workers" with "Reduce chunk_size or increase timeout"
 
 **`run_boltz_predict`** (single-file version):
-- Add `num_workers` and `preprocessing_threads` params for consistency, forwarded to `build_boltz_command`
+- Add `num_workers`, `preprocessing_threads`, and `max_parallel_samples` params for consistency, forwarded to `build_boltz_command`
 
 ### 2. `src/quality_graft/data/datamodule.py`
 
@@ -47,6 +48,7 @@ Use Boltz's native `--devices N` flag to let a single process distribute inferen
 - Add `"devices"` reading from `num_devices` config key (the GPU count for Boltz `--devices` flag)
 - Add `"num_workers"` from config
 - Add `"preprocessing_threads"` from config
+- Add `"max_parallel_samples"` from config
 
 **Config key consolidation**: The current config has both `devices: 1` and `num_devices: 1`. After this change, only `num_devices` is used (it becomes the `--devices` value). Remove the `devices` key from all config files to avoid confusion.
 
@@ -58,6 +60,7 @@ Use Boltz's native `--devices N` flag to let a single process distribute inferen
 - Remove `devices` key (consolidated into `num_devices`)
 - Add `num_workers: 2` (Boltz dataloader workers)
 - Add `preprocessing_threads: null` (null = Boltz default of `cpu_count()`)
+- Add `max_parallel_samples: null` (null = Boltz default of 5)
 - Note: this file has no `num_boltz_workers` or `chunk_size` — no removal needed
 
 **`configs/data/dataset_monomers_len_128.yaml`**:
@@ -65,6 +68,7 @@ Use Boltz's native `--devices N` flag to let a single process distribute inferen
 - Remove `devices` key (consolidated into `num_devices`)
 - Add `num_workers: 2` (Boltz dataloader workers)
 - Add `preprocessing_threads: null`
+- Add `max_parallel_samples: null`
 - Keep `chunk_size`, `num_devices`, `timeout_per_structure`
 
 ### 4. `scripts/preprocess_full.sbatch`
