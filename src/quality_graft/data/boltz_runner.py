@@ -208,6 +208,9 @@ def run_boltz_predict(
     recycling_steps: int = 3,
     use_msa_server: bool = False,
     override: bool = False,
+    num_workers: int = 2,
+    preprocessing_threads: int | None = None,
+    max_parallel_samples: int | None = None,
 ) -> BoltzResult:
     """Run boltz predict as a subprocess and parse results.
 
@@ -222,6 +225,9 @@ def run_boltz_predict(
         recycling_steps: Number of recycling steps.
         use_msa_server: Whether to use the MSA server.
         override: Whether to override existing results.
+        num_workers: Number of Boltz dataloader workers.
+        preprocessing_threads: Number of Boltz preprocessing threads (None = Boltz default).
+        max_parallel_samples: Max diffusion samples processed in parallel (None = Boltz default of 5).
 
     Returns:
         BoltzResult with pLDDT array on success, or error information on failure.
@@ -238,6 +244,9 @@ def run_boltz_predict(
         recycling_steps,
         use_msa_server,
         override,
+        num_workers,
+        preprocessing_threads,
+        max_parallel_samples,
     )
 
     logger.info("Running Boltz: {}", " ".join(cmd))
