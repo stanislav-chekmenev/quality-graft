@@ -12,10 +12,11 @@ Usage:
 
 from __future__ import annotations
 
+import csv
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import torch
 from loguru import logger
@@ -28,6 +29,33 @@ from quality_graft.data.boltz_runner import run_boltz_predict_dir
 from quality_graft.data.cif_utils import parse_cif_chains, chains_to_boltz_yaml
 from quality_graft.data.plddt_utils import plddt_to_bin
 
+PLDDT_STATUS_FILE = "plddt_status.csv"
+
+
+def _load_plddt_status(path: Path) -> Dict[str, bool]:
+    """Load plddt_status.csv into {structure_id: has_plddt} dict."""
+    status: Dict[str, bool] = {}
+    if not path.exists():
+        return status
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            status[row["structure_id"]] = row["has_plddt"] == "true"
+    return status
+
+
+def _save_plddt_status(path: Path, status: Dict[str, bool]) -> None:
+    """Write plddt_status.csv from {structure_id: has_plddt} dict."""
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["structure_id", "has_plddt"])
+        writer.writeheader()
+        for sid in sorted(status):
+            writer.writerow({"structure_id": sid, "has_plddt": "true" if status[sid] else "false"})
+
+
+def _get_plddt_set(status: Dict[str, bool]) -> Set[str]:
+    """Return set of structure_ids that have pLDDT."""
+    return {sid for sid, has in status.items() if has}
 
 
 class QualityGraftDataModule(PDBLightningDataModule):
@@ -62,6 +90,10 @@ class QualityGraftDataModule(PDBLightningDataModule):
         self.boltz_work_dir = self.data_dir / "boltz_work"
         self.boltz_inputs_dir = self.boltz_work_dir / "inputs"
 
+    @property
+    def plddt_status_path(self) -> Path:
+        return self.processed_dir / PLDDT_STATUS_FILE
+
     def setup(self, stage=None):
         if self.local_only:
             self._setup_local_only(stage)
@@ -69,25 +101,17 @@ class QualityGraftDataModule(PDBLightningDataModule):
             super().setup(stage)
 
         # Filter splits to only include structures that have pLDDT labels.
-        # Structures where Boltz failed/timed out during preprocessing will
-        # have .pt files on disk but no plddt_bin attribute — these would
-        # crash training_step.
         if stage in ("fit", None) and self.dfs_splits is not None:
+            plddt_set = _get_plddt_set(_load_plddt_status(self.plddt_status_path))
+
             for split_name in list(self.dfs_splits.keys()):
                 df = self.dfs_splits[split_name]
                 has_plddt = []
                 for _, row in df.iterrows():
                     pdb = row["pdb"]
                     chain = row.get("chain")
-                    fname = f"{pdb}_{chain}.pt" if chain else f"{pdb}.pt"
-                    pt_path = self.processed_dir / fname
-                    if pt_path.exists():
-                        graph = torch.load(pt_path, weights_only=False)
-                        has_plddt.append(
-                            hasattr(graph, "plddt_bin") and graph.plddt_bin is not None
-                        )
-                    else:
-                        has_plddt.append(False)
+                    sid = f"{pdb}_{chain}" if chain else pdb
+                    has_plddt.append(sid in plddt_set)
                 before = len(df)
                 self.dfs_splits[split_name] = df[has_plddt].reset_index(drop=True)
                 after = len(self.dfs_splits[split_name])
@@ -109,39 +133,61 @@ class QualityGraftDataModule(PDBLightningDataModule):
                 self.val_ds = self.train_ds
 
     def _setup_local_only(self, stage=None):
-        """Setup for local_only mode: build DataFrame from .pt files, skip CSV.
+        """Setup for local_only mode: build DataFrame from plddt_status.csv.
 
-        Only includes .pt files that already have pLDDT labels (plddt_bin),
-        since files without labels would be filtered out later and would
-        crash training_step.
+        Falls back to scanning .pt files if the CSV doesn't exist yet.
         """
         import pandas as pd
 
-        # Build DataFrame from .pt filenames, keeping only files with pLDDT
-        pt_files = sorted(self.processed_dir.glob("*.pt"))
-        records = []
-        n_skipped = 0
-        for pt in pt_files:
-            graph = torch.load(pt, weights_only=False)
-            if not (hasattr(graph, "plddt_bin") and graph.plddt_bin is not None):
-                n_skipped += 1
-                continue
-            stem = pt.stem  # e.g. "1abc_A" or "1abc"
-            parts = stem.split("_", 1)
-            pdb = parts[0]
-            chain = parts[1] if len(parts) > 1 else None
-            records.append({"pdb": pdb, "chain": chain, "id": stem})
+        plddt_status = _load_plddt_status(self.plddt_status_path)
+
+        if plddt_status:
+            # Fast path: use the CSV
+            plddt_set = _get_plddt_set(plddt_status)
+            records = []
+            for sid in sorted(plddt_set):
+                parts = sid.split("_", 1)
+                pdb = parts[0]
+                chain = parts[1] if len(parts) > 1 else None
+                records.append({"pdb": pdb, "chain": chain, "id": sid})
+            n_total = len(plddt_status)
+            n_skipped = n_total - len(records)
+        else:
+            # Fallback: scan .pt files (first run before CSV exists)
+            logger.warning(
+                "plddt_status.csv not found, scanning .pt files (slow). "
+                "Run preprocessing to generate it."
+            )
+            pt_files = sorted(self.processed_dir.glob("*.pt"))
+            records = []
+            n_skipped = 0
+            status: Dict[str, bool] = {}
+            for pt in pt_files:
+                graph = torch.load(pt, weights_only=False)
+                has = hasattr(graph, "plddt_bin") and graph.plddt_bin is not None
+                status[pt.stem] = has
+                if not has:
+                    n_skipped += 1
+                    continue
+                parts = pt.stem.split("_", 1)
+                pdb = parts[0]
+                chain = parts[1] if len(parts) > 1 else None
+                records.append({"pdb": pdb, "chain": chain, "id": pt.stem})
+            n_total = len(pt_files)
+            # Save the CSV so next time is fast
+            _save_plddt_status(self.plddt_status_path, status)
+
         if not records:
             raise RuntimeError(
-                f"local_only=True but 0/{len(pt_files)} .pt files in "
+                f"local_only=True but 0 .pt files in "
                 f"{self.processed_dir} have pLDDT labels. "
                 "Run preprocessing (mode=preprocess) first."
             )
         self.df_data = pd.DataFrame(records)
         logger.info(
             "local_only: {} .pt files with pLDDT ({} skipped without labels, "
-            "{} total on disk)",
-            len(records), n_skipped, len(pt_files),
+            "{} total)",
+            len(records), n_skipped, n_total,
         )
 
         # Split using the existing datasplitter
@@ -172,7 +218,6 @@ class QualityGraftDataModule(PDBLightningDataModule):
         """Two-pass preprocessing: PyG conversion then Boltz-1 pLDDT labels."""
         if self.local_only:
             # Data already preprocessed — skip all preprocessing.
-            # setup() will filter out structures without pLDDT labels.
             if not self.processed_dir.exists() or not any(self.processed_dir.glob("*.pt")):
                 raise RuntimeError(
                     f"local_only=True but no .pt files found in {self.processed_dir}. "
@@ -222,19 +267,18 @@ class QualityGraftDataModule(PDBLightningDataModule):
             if stale.is_dir():
                 shutil.rmtree(stale)
 
-        # Scan .pt files, skip those with pLDDT already
+        # Load pLDDT status from CSV (fast) instead of loading every .pt file
+        plddt_status = _load_plddt_status(self.plddt_status_path)
+        plddt_set = _get_plddt_set(plddt_status)
+
         submitted_ids: List[str] = []
         n_skipped = 0
 
         for fname in file_names:
-            pt_path = self.processed_dir / fname
-            graph = torch.load(pt_path, weights_only=False)
-
-            if hasattr(graph, "plddt_bin") and graph.plddt_bin is not None:
+            structure_id = fname.replace(".pt", "")
+            if structure_id in plddt_set:
                 n_skipped += 1
                 continue
-
-            structure_id = fname.replace(".pt", "")
             submitted_ids.append(structure_id)
 
         logger.info(
@@ -332,6 +376,9 @@ class QualityGraftDataModule(PDBLightningDataModule):
                 except Exception as e:
                     logger.error("Chunk {} raised exception: {}", chunk_idx, e)
                     n_failed += len(chunk_sids)
+                    # Mark as failed (no pLDDT) in status
+                    for sid in chunk_sids:
+                        plddt_status[sid] = False
                     continue
 
                 # Check for OOM (boltz_runner formats OOM as "Boltz OOM: GPU memory exhaustion...")
@@ -352,6 +399,7 @@ class QualityGraftDataModule(PDBLightningDataModule):
                     boltz_result = batch_result.results.get(sid)
                     if boltz_result is None or boltz_result.plddt is None:
                         chunk_failed += 1
+                        plddt_status[sid] = False
                         continue
 
                     fname = f"{sid}.pt"
@@ -366,15 +414,20 @@ class QualityGraftDataModule(PDBLightningDataModule):
                             sid, plddt_np.shape[0], n_residues,
                         )
                         chunk_failed += 1
+                        plddt_status[sid] = False
                         continue
 
                     graph.plddt = torch.tensor(plddt_np, dtype=torch.float32)
                     graph.plddt_bin = plddt_to_bin(graph.plddt, num_bins=self.num_plddt_bins)
                     torch.save(graph, pt_path)
                     chunk_labeled += 1
+                    plddt_status[sid] = True
 
                 n_labeled += chunk_labeled
                 n_failed += chunk_failed
+
+                # Save status after each chunk so progress is preserved on crash
+                _save_plddt_status(self.plddt_status_path, plddt_status)
 
                 logger.info(
                     "Chunks done: {}/{} | total labeled: {}/{} ({:.1f}%) | "
@@ -384,6 +437,9 @@ class QualityGraftDataModule(PDBLightningDataModule):
                     100.0 * n_labeled / len(submitted_ids),
                     chunk_labeled, len(chunk_sids), chunk_failed,
                 )
+
+        # Final save
+        _save_plddt_status(self.plddt_status_path, plddt_status)
 
         logger.info(
             "Boltz parallel pass complete: {}/{} labeled, {} failed, {} skipped "
