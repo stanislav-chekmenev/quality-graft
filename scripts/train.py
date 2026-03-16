@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """Quality-Graft training script.
 
 Usage:
@@ -17,6 +16,9 @@ from __future__ import annotations
 import sys
 
 from loguru import logger
+
+logger.info("Importing modules...")
+
 from datetime import datetime
 from pathlib import Path
 
@@ -27,6 +29,9 @@ import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
 from omegaconf import DictConfig, OmegaConf
+
+logger.info("Modules imported successfully.")
+
 
 # Ensure project paths are importable
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

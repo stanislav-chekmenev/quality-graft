@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=qg_train
-#SBATCH --partition=gpu
+#SBATCH --partition=h100
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:rtx6000:2
+#SBATCH --gres=gpu:h100nvl:2
 #SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=12
-#SBATCH --time=2-00:00:00
+#SBATCH --time=3-00:00:00
 #SBATCH --output=logs/train_full_%j.out
 #SBATCH --error=logs/train_full_%j.err
 
@@ -17,18 +17,45 @@ echo "GPU devices: $CUDA_VISIBLE_DEVICES"
 echo "==========================================="
 
 # --- Environment ---
-eval "$(conda shell.bash hook)" && conda activate quality_graft_env
-
 PROJECT_ROOT="/mnt/labs/home/schekmenev/projects/quality-graft"
+
+NUM_DEVICES=2
+DEVICE_TYPE=h100nvl
+
+if [ "$DEVICE_TYPE" == "rtx6000" ]; then
+    DATA_ROOT="/scratch/schekmenev"
+elif [ "$DEVICE_TYPE" == "h100nvl" ]; then
+    DATA_ROOT="/netscratch/schekmenev"
+fi
+
+# Unpack .venv to scratch (once per node, skips if already present)
+# Create tarball on login node:
+#   uv venv --relocatable --python 3.11 && uv sync
+#   tar czf "$PROJECT_ROOT/venv.tar.gz" -C "$PROJECT_ROOT" .venv
+ENV_TARBALL="$PROJECT_ROOT/venv.tar.gz"
+ENV_LOCAL="$DATA_ROOT/.venv"
+srun --ntasks-per-node=1 bash -c "
+    if [ ! -d \"$ENV_LOCAL/bin\" ]; then
+        mkdir -p \"$DATA_ROOT\"
+        tar xzf \"$ENV_TARBALL\" -C \"$DATA_ROOT\"
+        echo \"\$(hostname): env unpacked to $ENV_LOCAL\"
+    else
+        echo \"\$(hostname): env already at $ENV_LOCAL\"
+    fi
+"
+export VIRTUAL_ENV="$ENV_LOCAL"
+export PATH="$ENV_LOCAL/bin:$PATH"
+
 export PYTHONPATH="${PYTHONPATH:-}:$PROJECT_ROOT:$PROJECT_ROOT/src"
 
 mkdir -p "$PROJECT_ROOT/logs"
 
 # --- Stage data to node-local scratch ---
-DATA_SRC="/mnt/labs/data/bronstein/monomers_max_len_128_plddt_boltz_full"
-DATA_DIR="/scratch/schekmenev/monomers_max_len_128_plddt_boltz"
-NUM_DEVICES=2
-DEVICE_TYPE=rtx6000
+
+GROUP_DATA_DIR="/mnt/labs/data/bronstein"
+DIR_NAME="monomers_max_len_128_plddt_boltz_full"
+DATA_SRC="$GROUP_DATA_DIR/$DIR_NAME"
+DATA_DIR="$DATA_ROOT/$DIR_NAME"
 
 # ── NCCL tuning (critical for multi-GPU stability) ────────────────
 export NCCL_DEBUG=INFO
@@ -52,7 +79,7 @@ if [ "$N_PT" -eq 0 ]; then
 fi
 
 # Stage model weights to node-local scratch
-CKPT_DIR="/scratch/schekmenev/ckpt"
+CKPT_DIR="$DATA_ROOT/ckpt"
 mkdir -p "$CKPT_DIR"
 echo "Staging model weights to $CKPT_DIR..."
 cp -v "$PROJECT_ROOT/ckpt/"*.ckpt "$CKPT_DIR/"
@@ -74,7 +101,7 @@ srun python "$PROJECT_ROOT/scripts/train.py" \
     training.devices=$NUM_DEVICES \
     training.strategy=ddp \
     training.precision=bf16-mixed \
-    training.max_epochs=100 \
+    training.max_epochs=200 \
     training.check_val_every_n_epoch=10 \
     model.la_proteina_wrapper.proteina_ckpt_path="$CKPT_DIR/LD1_ucond_notri_512.ckpt" \
     model.la_proteina_wrapper.autoencoder_ckpt_path="$CKPT_DIR/AE1_ucond_512.ckpt" \
