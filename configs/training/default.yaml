@@ -10,7 +10,8 @@ scheduler:
   min_lr: 1.0e-6
 
 # Trainer & data configuration
-max_length: 128
+max_length: 256
+min_length: 128
 batch_size: 16
 num_workers: 16
 precision: bf16

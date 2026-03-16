@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=make_full_ds
+#SBATCH --job-name=ds_128_256
 #SBATCH --partition=gpu
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:rtx6000:2
+#SBATCH --gres=gpu:rtx6000:1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --time=3-00:00:00
+#SBATCH --cpus-per-task=24
+#SBATCH --time=3-12:00:00
 #SBATCH --output=logs/preprocess_full_%j.out
 #SBATCH --error=logs/preprocess_full_%j.err
 
@@ -23,12 +23,12 @@ PROJECT_ROOT="/mnt/labs/home/schekmenev/projects/quality-graft"
 export PYTHONPATH="${PYTHONPATH:-}:$PROJECT_ROOT:$PROJECT_ROOT/src"
 
 # --- Num GPUS ---
-NUM_DEVICES=2
+NUM_DEVICES=1
 
 mkdir -p "$PROJECT_ROOT/logs"
 
 # RTX6000 jobs: use /scratch for fast I/O
-SCRATCH_DIR="/scratch/schekmenev/monomers_max_len_128_plddt_boltz_full"
+SCRATCH_DIR="/scratch/schekmenev/monomers_len_128_256_plddt_boltz_full"
 mkdir -p "$SCRATCH_DIR"
 
 echo "Data directory: $SCRATCH_DIR"
@@ -51,16 +51,21 @@ export HYDRA_FULL_ERROR=1         # Show full stack traces for Hydra errors
 
 # --- Run full preprocessing ---
 echo "Starting full preprocessing..."
-python "$PROJECT_ROOT/scripts/train.py" \
+nsys profile -t cuda,nvtx,osrt -o "$PROJECT_ROOT/logs/job_profile" python "$PROJECT_ROOT/scripts/train.py" \
     mode=preprocess \
     data.local_only=false \
     data.data_dir="$SCRATCH_DIR" \
-    data.selector_num_workers=16 \
+    data.selector_num_workers=8 \
     data.boltz.num_devices=$NUM_DEVICES \
+    data.boltz.chunk_size=5 \
+    data.boltz.max_parallel_samples=5 \
+    data.boltz.sampling_steps=50 \
+    data.boltz.recycling_steps=1 \
     data.boltz.num_workers=4 \
-    data.boltz.preprocessing_threads=8 \
-    data.boltz.timeout_per_structure=180 \
-    training.max_length=128
+    data.boltz.preprocessing_threads=12 \
+    data.boltz.timeout_per_structure=120 \
+    training.max_length=256 \
+    training.min_length=128
 
 # Copy results to my data dir in the Bronstein group
 echo "Copying results to group data directory..."

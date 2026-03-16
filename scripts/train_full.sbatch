@@ -25,7 +25,7 @@ export PYTHONPATH="${PYTHONPATH:-}:$PROJECT_ROOT:$PROJECT_ROOT/src"
 mkdir -p "$PROJECT_ROOT/logs"
 
 # --- Stage data to node-local scratch ---
-DATA_SRC="/mnt/labs/data/bronstein/monomers_max_len_128_plddt_boltz"
+DATA_SRC="/mnt/labs/data/bronstein/monomers_max_len_128_plddt_boltz_full"
 DATA_DIR="/scratch/schekmenev/monomers_max_len_128_plddt_boltz"
 NUM_DEVICES=2
 DEVICE_TYPE=rtx6000

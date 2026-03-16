@@ -14,8 +14,9 @@ Usage:
 
 from __future__ import annotations
 
-import logging
 import sys
+
+from loguru import logger
 from datetime import datetime
 from pathlib import Path
 
@@ -47,8 +48,6 @@ from quality_graft.models.confidence_head import BoltzConfidenceHead
 from quality_graft.models.la_proteina_wrapper import LaProteinaWrapper
 from quality_graft.models.quality_graft import QualityGraft
 from quality_graft.training.lightning_module import QualityGraftLightningModule
-
-logger = logging.getLogger(__name__)
 
 
 class TransformWrapper:
@@ -230,8 +229,6 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
 
 @hydra.main(version_base=None, config_path=str(PROJECT_ROOT / "configs"), config_name="config")
 def main(cfg: DictConfig) -> None:
-    """Main entry point."""
-    logging.basicConfig(level=logging.INFO)
 
     import torch
     torch.set_float32_matmul_precision("high")
