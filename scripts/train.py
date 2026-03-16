@@ -14,8 +14,9 @@ Usage:
 
 from __future__ import annotations
 
-import logging
 import sys
+
+from loguru import logger
 from datetime import datetime
 from pathlib import Path
 
@@ -23,7 +24,7 @@ import os
 
 import hydra
 import lightning as L
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
 from omegaconf import DictConfig, OmegaConf
 
@@ -47,8 +48,6 @@ from quality_graft.models.confidence_head import BoltzConfidenceHead
 from quality_graft.models.la_proteina_wrapper import LaProteinaWrapper
 from quality_graft.models.quality_graft import QualityGraft
 from quality_graft.training.lightning_module import QualityGraftLightningModule
-
-logger = logging.getLogger(__name__)
 
 
 class TransformWrapper:
@@ -182,17 +181,35 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
 
     # Callbacks
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ckpt_cfg = train_cfg.get("checkpoint", {})
+    ckpt_monitor = ckpt_cfg.get("monitor", "val/plddt_accuracy")
+    ckpt_mode = ckpt_cfg.get("mode", "max")
+    ckpt_save_top_k = ckpt_cfg.get("save_top_k", 3)
+
+    # Build filename from monitor name
+    metric_short = ckpt_monitor.replace("val/", "").replace("plddt_", "")
     callbacks = [
         ModelCheckpoint(
             dirpath=f"{train_cfg.checkpoint_dir}/{run_timestamp}",
-            monitor="val/loss",
-            mode="min",
-            save_top_k=3,
-            filename="epoch{epoch:02d}-val_loss{val/loss:.4f}",
+            monitor=ckpt_monitor,
+            mode=ckpt_mode,
+            save_top_k=ckpt_save_top_k,
+            filename=f"epoch{{epoch:02d}}-{metric_short}{{{ckpt_monitor}:.4f}}",
             auto_insert_metric_name=False,
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
+
+    es_cfg = train_cfg.get("early_stopping", {})
+    if es_cfg.get("enabled", False):
+        callbacks.append(
+            EarlyStopping(
+                monitor=es_cfg.get("monitor", ckpt_monitor),
+                mode=es_cfg.get("mode", ckpt_mode),
+                patience=es_cfg.get("patience", 5),
+                verbose=True,
+            )
+        )
 
     return L.Trainer(
         max_epochs=train_cfg.max_epochs,
@@ -212,8 +229,6 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
 
 @hydra.main(version_base=None, config_path=str(PROJECT_ROOT / "configs"), config_name="config")
 def main(cfg: DictConfig) -> None:
-    """Main entry point."""
-    logging.basicConfig(level=logging.INFO)
 
     import torch
     torch.set_float32_matmul_precision("high")

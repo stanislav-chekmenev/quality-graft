@@ -2,7 +2,7 @@
 #SBATCH --job-name=qg_prep_debug
 #SBATCH --partition=h100
 #SBATCH --qos=debug
-#SBATCH --gres=gpu:h100nvl:1
+#SBATCH --gres=gpu:h100nvl:4
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
@@ -33,6 +33,13 @@ mkdir -p "$SCRATCH_DIR"
 
 echo "Data directory: $SCRATCH_DIR"
 
+# Stage model weights to fast scratch (for follow-up train jobs)
+CKPT_SCRATCH="/netscratch/schekmenev/ckpt"
+mkdir -p "$CKPT_SCRATCH"
+echo "Staging model weights to $CKPT_SCRATCH..."
+cp -v "$PROJECT_ROOT/ckpt/"*.ckpt "$CKPT_SCRATCH/" 2>/dev/null || echo "No ckpt files to stage (ok for preprocess-only)"
+echo "Weight staging complete."
+
 # --- Run preprocessing (tiny fraction for smoke test) ---
 echo "Starting debug preprocessing..."
 python "$PROJECT_ROOT/scripts/train.py" \
@@ -40,7 +47,8 @@ python "$PROJECT_ROOT/scripts/train.py" \
     data.data_dir="$SCRATCH_DIR" \
     data.fraction=0.005 \
     data.selector_num_workers=8 \
-    data.boltz.num_boltz_workers=2 \
+    data.boltz.num_devices=4 \
+    data.boltz.num_boltz_workers=8 \
     data.boltz.chunk_size=5 \
     data.boltz.sampling_steps=20 \
     data.boltz.recycling_steps=1 \

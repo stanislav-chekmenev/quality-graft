@@ -211,8 +211,8 @@ class TestPrepareYamlOutputDir:
             assert result.parent == boltz_inputs
 
 
-class TestParallelBoltzPass:
-    """Test parallel chunked Boltz execution."""
+class TestChunkedBoltzPass:
+    """Test sequential chunked Boltz execution."""
 
     def _setup_structures(self, tmpdir, structure_ids, n_residues=5):
         """Helper to create .pt files and raw CIFs for testing."""
@@ -241,7 +241,6 @@ class TestParallelBoltzPass:
             dm = QualityGraftDataModule(
                 data_dir=tmpdir,
                 boltz_config={
-                    "num_boltz_workers": 2,
                     "chunk_size": 10,
                 },
             )
@@ -274,7 +273,6 @@ class TestParallelBoltzPass:
             dm = QualityGraftDataModule(
                 data_dir=tmpdir,
                 boltz_config={
-                    "num_boltz_workers": 2,
                     "chunk_size": 10,
                 },
             )
@@ -313,7 +311,6 @@ class TestParallelBoltzPass:
             dm = QualityGraftDataModule(
                 data_dir=tmpdir,
                 boltz_config={
-                    "num_boltz_workers": 2,
                     "chunk_size": 3,
                 },
             )

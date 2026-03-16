@@ -23,7 +23,6 @@ python "$PROJECT_ROOT/scripts/train.py" \
     data.data_dir="$DEBUG_DIR" \
     data.local_only=true \
     data.selector_num_workers=4 \
-    data.boltz.num_boltz_workers=2 \
     data.boltz.chunk_size=1 \
     data.num_workers=4 \
     data.boltz.sampling_steps=20 \

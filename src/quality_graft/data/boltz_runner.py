@@ -78,6 +78,9 @@ def build_boltz_command(
     recycling_steps: int = 3,
     use_msa_server: bool = False,
     override: bool = False,
+    num_workers: int = 2,
+    preprocessing_threads: int | None = None,
+    max_parallel_samples: int | None = None,
 ) -> list[str]:
     """Build the boltz predict CLI command as a list of strings.
 
@@ -92,6 +95,9 @@ def build_boltz_command(
         recycling_steps: Number of recycling steps.
         use_msa_server: Whether to use the MSA server.
         override: Whether to override existing results.
+        num_workers: Number of Boltz dataloader workers.
+        preprocessing_threads: Number of Boltz preprocessing threads (None = Boltz default).
+        max_parallel_samples: Max diffusion samples processed in parallel (None = Boltz default of 5).
 
     Returns:
         Command as a list of strings suitable for subprocess.run().
@@ -114,7 +120,15 @@ def build_boltz_command(
         str(sampling_steps),
         "--recycling_steps",
         str(recycling_steps),
+        "--num_workers",
+        str(num_workers),
     ]
+
+    if preprocessing_threads is not None:
+        cmd.extend(["--preprocessing-threads", str(preprocessing_threads)])
+
+    if max_parallel_samples is not None:
+        cmd.extend(["--max_parallel_samples", str(max_parallel_samples)])
 
     if use_msa_server:
         cmd.append("--use_msa_server")
@@ -194,6 +208,9 @@ def run_boltz_predict(
     recycling_steps: int = 3,
     use_msa_server: bool = False,
     override: bool = False,
+    num_workers: int = 2,
+    preprocessing_threads: int | None = None,
+    max_parallel_samples: int | None = None,
 ) -> BoltzResult:
     """Run boltz predict as a subprocess and parse results.
 
@@ -208,6 +225,9 @@ def run_boltz_predict(
         recycling_steps: Number of recycling steps.
         use_msa_server: Whether to use the MSA server.
         override: Whether to override existing results.
+        num_workers: Number of Boltz dataloader workers.
+        preprocessing_threads: Number of Boltz preprocessing threads (None = Boltz default).
+        max_parallel_samples: Max diffusion samples processed in parallel (None = Boltz default of 5).
 
     Returns:
         BoltzResult with pLDDT array on success, or error information on failure.
@@ -224,6 +244,9 @@ def run_boltz_predict(
         recycling_steps,
         use_msa_server,
         override,
+        num_workers,
+        preprocessing_threads,
+        max_parallel_samples,
     )
 
     logger.info("Running Boltz: {}", " ".join(cmd))
@@ -297,25 +320,32 @@ def run_boltz_predict_dir(
     recycling_steps: int = 3,
     use_msa_server: bool = False,
     timeout: int | None = None,
+    num_workers: int = 2,
+    preprocessing_threads: int | None = None,
+    max_parallel_samples: int | None = None,
 ) -> BoltzBatchResult:
     """Run boltz predict on a directory of YAMLs and collect results.
 
-    Passes the entire input_dir to a single `boltz predict` invocation.
-    After the subprocess finishes (or crashes), iterates over structure_ids
-    and collects whatever pLDDT outputs exist.
+    Passes the entire input_dir to a single `boltz predict` invocation
+    with native multi-GPU support via --devices. After the subprocess
+    finishes (or crashes), iterates over structure_ids and collects
+    whatever pLDDT outputs exist.
 
     Args:
         input_dir: Directory containing YAML files for Boltz.
         out_dir: Directory where Boltz writes prediction outputs.
         structure_ids: List of structure IDs to collect results for.
         model: Model name (default: "boltz1").
-        devices: Number of devices to use.
+        devices: Number of devices to use (passed as --devices to Boltz).
         accelerator: Accelerator type ("gpu" or "cpu").
         diffusion_samples: Number of diffusion samples.
         sampling_steps: Number of sampling steps.
         recycling_steps: Number of recycling steps.
         use_msa_server: Whether to use the MSA server.
         timeout: Max seconds to wait for the subprocess. None means no limit.
+        num_workers: Number of Boltz dataloader workers.
+        preprocessing_threads: Number of Boltz preprocessing threads (None = Boltz default).
+        max_parallel_samples: Max diffusion samples processed in parallel (None = Boltz default of 5).
 
     Returns:
         BoltzBatchResult with per-structure results for outputs found.
@@ -337,6 +367,9 @@ def run_boltz_predict_dir(
         recycling_steps=recycling_steps,
         use_msa_server=use_msa_server,
         override=False,
+        num_workers=num_workers,
+        preprocessing_threads=preprocessing_threads,
+        max_parallel_samples=max_parallel_samples,
     )
 
     logger.info("Running Boltz on directory ({} structures): {}", n_submitted, " ".join(cmd))
@@ -375,8 +408,7 @@ def run_boltz_predict_dir(
     except subprocess.TimeoutExpired as e:
         error_msg = (
             f"Boltz subprocess timed out after {timeout}s. "
-            f"Likely GPU memory deadlock from too many concurrent workers. "
-            f"Reduce num_boltz_workers or increase timeout."
+            f"Reduce chunk_size or increase timeout."
         )
         returncode = -2
         logger.error(error_msg)

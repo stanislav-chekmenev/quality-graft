@@ -1,7 +1,7 @@
 # Dataset configuration
 data_dir: data/pdb/
 max_length: ${training.max_length}
-min_length: 10
+min_length: ${training.min_length}
 molecule_type: protein
 oligomeric_min: 1
 oligomeric_max: 1
@@ -22,9 +22,13 @@ selector_num_workers: 32
 boltz:
   model: boltz1
   diffusion_samples: 1
-  sampling_steps: 200
-  recycling_steps: 3
-  devices: 1
+  sampling_steps: 50
+  recycling_steps: 1
   accelerator: gpu
   use_msa_server: false
-  timeout_per_structure: 300  # seconds; chunk timeout = chunk_size * this + 120s
+  chunk_size: 6
+  timeout_per_structure: 120  # seconds; chunk timeout = chunk_size * this + 120s
+  num_devices: 1  # Number of GPUs for Boltz --devices flag
+  num_workers: 2  # Boltz dataloader workers
+  preprocessing_threads: null  # null = Boltz default (cpu_count)
+  max_parallel_samples: null  # null = Boltz default (5)

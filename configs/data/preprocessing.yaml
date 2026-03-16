@@ -1,2 +1,0 @@
-# Preprocessing is handled by QualityGraftDataModule.prepare_data()
-# See configs/data/dataset.yaml for data module configuration.
