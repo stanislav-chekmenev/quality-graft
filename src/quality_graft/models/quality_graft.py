@@ -2,31 +2,16 @@
 
 Wires together the three core components:
 
-    La-Proteina (frozen) → Adaptor (trainable) → Boltz1 Confidence Head (frozen)
+    La-Proteina (frozen) → Adaptor (trainable) → Confidence Head → pLDDT
+
+The confidence head can be either:
+- **BoltzConfidenceHead** (frozen, 152.7M params): original 48-block pairformer
+- **StudentConfidenceHead** (trainable, ~11-14M params): distilled student network
 
 The model accepts a protein-structure batch (coordinates, masks, residue types)
 and produces per-residue quality predictions (pLDDT, PDE, resolved logits).
 
 Architecture reference: plans/architecture.md Section 5.4
-
-Sub-module responsibilities
----------------------------
-- **La-Proteina wrapper** (frozen): extracts trunk_seqs, trunk_pair,
-  local_latents, ca_coords, and optionally decoder_seqs from all-atom
-  coordinates via the autoencoder encoder + flow matcher + trunk + optional
-  decoder.
-- **Adaptor** (trainable): projects La-Proteina representations into Boltz1
-  dimension space (single 776→384, pair 256→128) with optional self-attention
-  refinement and C-alpha distogram injection.
-- **Confidence head** (frozen): runs the 48-block pairformer stack and
-  produces pLDDT/PDE/resolved logits via the linear prediction heads.
-
-Two construction patterns are supported:
-
-1. **Dependency injection** — pass pre-built sub-modules to ``__init__``.
-2. **Forward from representations** — call :meth:`forward_from_representations`
-   with pre-extracted La-Proteina features, bypassing the wrapper entirely
-   (useful for testing or pre-computed feature pipelines).
 """
 
 from __future__ import annotations
@@ -38,31 +23,34 @@ import torch.nn as nn
 from torch import Tensor
 
 from quality_graft.models.adaptor import AdaptorModule
-from quality_graft.models.confidence_head import BoltzConfidenceHead
-from quality_graft.models.la_proteina_wrapper import LaProteinaWrapper
 
 
 class QualityGraft(nn.Module):
     """Full Quality-Graft model.
 
-    La-Proteina (frozen) → Adaptor (trainable) → Boltz1 Confidence (frozen) → pLDDT
+    La-Proteina (frozen) → Adaptor (trainable) → Confidence Head → pLDDT
+
+    The confidence head can be either a frozen ``BoltzConfidenceHead``
+    (original architecture) or a trainable ``StudentConfidenceHead``
+    (distillation architecture).  Both share the same forward interface:
+    ``(s, z, mask) -> dict[str, Tensor]``.
 
     Parameters
     ----------
-    la_proteina : LaProteinaWrapper
+    la_proteina : nn.Module
         Frozen La-Proteina wrapper that extracts intermediate representations.
     adaptor : AdaptorModule
         Trainable adaptor that projects La-Proteina representations into
         Boltz1 dimension space.
-    confidence_head : BoltzConfidenceHead
-        Frozen Boltz1 confidence head with pairformer + prediction heads.
+    confidence_head : nn.Module
+        Confidence head (BoltzConfidenceHead or StudentConfidenceHead).
     """
 
     def __init__(
         self,
-        la_proteina: LaProteinaWrapper,
+        la_proteina: nn.Module,
         adaptor: AdaptorModule,
-        confidence_head: BoltzConfidenceHead,
+        confidence_head: nn.Module,
     ) -> None:
         super().__init__()
         self.la_proteina = la_proteina

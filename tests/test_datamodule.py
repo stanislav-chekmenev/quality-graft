@@ -31,14 +31,20 @@ def _make_fake_graph(pdb_id: str, n_residues: int = 10, has_plddt: bool = False)
     return graph
 
 
-def _make_batch_result(structure_plddt_map: dict[str, np.ndarray | None]) -> BoltzBatchResult:
+def _make_batch_result(
+    structure_plddt_map: dict[str, np.ndarray | None],
+    include_logits: bool = False,
+) -> BoltzBatchResult:
     """Build a BoltzBatchResult from a {structure_id: plddt_array} dict."""
     results = {}
     for sid, plddt in structure_plddt_map.items():
         if plddt is not None:
+            n = plddt.shape[0]
             results[sid] = BoltzResult(
                 structure_id=sid,
                 plddt=plddt,
+                plddt_logits=np.random.randn(n, 50).astype(np.float32) if include_logits else None,
+                pde_logits=np.random.randn(n, n, 64).astype(np.float32) if include_logits else None,
                 confidence_json=None,
                 success=True,
                 error_msg=None,
@@ -335,3 +341,103 @@ class TestChunkedBoltzPass:
             # Verify chunk naming
             for d in seen_input_dirs:
                 assert d.name.startswith("chunk_")
+
+
+class TestBoltzPassSavesLogits:
+    """Test that logits from Boltz are saved into .pt files."""
+
+    def test_plddt_and_pde_logits_saved(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            processed = Path(tmpdir) / "processed"
+            processed.mkdir()
+            raw = Path(tmpdir) / "raw"
+            raw.mkdir()
+            boltz_inputs = Path(tmpdir) / "boltz_work" / "inputs"
+            boltz_inputs.mkdir(parents=True)
+
+            n_residues = 5
+            graph = _make_fake_graph("test_pdb", n_residues=n_residues, has_plddt=False)
+            torch.save(graph, processed / "test_pdb.pt")
+
+            (raw / "test.cif").write_text("dummy")
+
+            dm = QualityGraftDataModule(
+                data_dir=tmpdir,
+                boltz_config={"model": "boltz1", "devices": 1, "accelerator": "cpu"},
+            )
+
+            fake_plddt = np.random.rand(n_residues).astype(np.float32)
+
+            def mock_predict_dir(input_dir, out_dir, structure_ids, **kwargs):
+                return _make_batch_result(
+                    {sid: fake_plddt.copy() for sid in structure_ids},
+                    include_logits=True,
+                )
+
+            with patch.object(dm, "_prepare_boltz_yaml", return_value=Path("dummy.yaml")), \
+                 patch("quality_graft.data.datamodule.run_boltz_predict_dir", side_effect=mock_predict_dir):
+                dm._run_boltz_pass(["test_pdb.pt"])
+
+            updated = torch.load(processed / "test_pdb.pt", weights_only=False)
+            assert hasattr(updated, "plddt_logits")
+            assert updated.plddt_logits.shape == (n_residues, 50)
+            assert hasattr(updated, "pde_logits")
+            assert updated.pde_logits.shape == (n_residues, n_residues, 64)
+
+
+class TestReprocessBoltzMode:
+    """Test reprocess_boltz=True forces re-processing of all structures."""
+
+    def test_reprocess_overrides_existing_plddt(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            processed = Path(tmpdir) / "processed"
+            processed.mkdir()
+            raw = Path(tmpdir) / "raw"
+            raw.mkdir()
+            boltz_inputs = Path(tmpdir) / "boltz_work" / "inputs"
+            boltz_inputs.mkdir(parents=True)
+
+            n_residues = 5
+            graph = _make_fake_graph("test_pdb", n_residues=n_residues, has_plddt=True)
+            torch.save(graph, processed / "test_pdb.pt")
+
+            (raw / "test.cif").write_text("dummy")
+
+            # Mark as already having pLDDT in status file
+            from quality_graft.data.datamodule import _save_plddt_status
+            _save_plddt_status(processed / "plddt_status.csv", {"test_pdb": True})
+
+            # Without reprocess_boltz, should skip
+            dm_skip = QualityGraftDataModule(
+                data_dir=tmpdir,
+                boltz_config={},
+                reprocess_boltz=False,
+            )
+            with patch("quality_graft.data.datamodule.run_boltz_predict_dir") as mock_batch:
+                dm_skip._run_boltz_pass(["test_pdb.pt"])
+                mock_batch.assert_not_called()
+
+            # With reprocess_boltz, should re-process
+            dm_reprocess = QualityGraftDataModule(
+                data_dir=tmpdir,
+                boltz_config={"model": "boltz1", "devices": 1, "accelerator": "cpu"},
+                reprocess_boltz=True,
+            )
+            fake_plddt = np.random.rand(n_residues).astype(np.float32)
+
+            def mock_predict_dir(input_dir, out_dir, structure_ids, **kwargs):
+                return _make_batch_result(
+                    {sid: fake_plddt.copy() for sid in structure_ids},
+                    include_logits=True,
+                )
+
+            with patch.object(dm_reprocess, "_prepare_boltz_yaml", return_value=Path("dummy.yaml")), \
+                 patch("quality_graft.data.datamodule.run_boltz_predict_dir", side_effect=mock_predict_dir) as mock_batch:
+                dm_reprocess._run_boltz_pass(["test_pdb.pt"])
+                mock_batch.assert_called_once()
+
+            updated = torch.load(processed / "test_pdb.pt", weights_only=False)
+            assert hasattr(updated, "plddt_logits")
+            assert updated.plddt_logits.shape == (n_residues, 50)
+            assert hasattr(updated, "pde_logits")
+            assert updated.pde_logits.shape == (n_residues, n_residues, 64)

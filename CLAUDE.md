@@ -12,9 +12,9 @@ Two modes are supported:
 
 ## Environment Setup
 
-Conda/Micromamba environment managed via `environment.yaml`:
+UV Venv environment managed through pyproject.toml:
 ```bash
-eval "$(micromamba shell hook --shell bash)" && micromamba activate quality_graft_env
+source .venv/bin/activate
 ```
 
 PYTHONPATH must include both project root and src/:

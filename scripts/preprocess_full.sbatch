@@ -35,10 +35,17 @@ ENV_TARBALL="$PROJECT_ROOT/venv.tar.gz"
 ENV_LOCAL="$DATA_ROOT/.venv"
 if [ ! -d "$ENV_LOCAL/bin" ]; then
     mkdir -p "$DATA_ROOT"
-    tar xzf "$ENV_TARBALL" -C "$DATA_ROOT"
+    if ! tar xzf "$ENV_TARBALL" -C "$DATA_ROOT"; then
+        echo "ERROR: Failed to unpack $ENV_TARBALL" >&2
+        exit 1
+    fi
     echo "Env unpacked to $ENV_LOCAL"
 else
     echo "Env already present at $ENV_LOCAL"
+fi
+if [ ! -d "$ENV_LOCAL/bin" ]; then
+    echo "ERROR: Virtual environment not available at $ENV_LOCAL. Aborting."
+    exit 1
 fi
 export VIRTUAL_ENV="$ENV_LOCAL"
 export PATH="$ENV_LOCAL/bin:$PATH"

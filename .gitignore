@@ -114,4 +114,4 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-venv.tag.gz
+venv.tar.gz
