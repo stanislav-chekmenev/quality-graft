@@ -60,6 +60,7 @@ echo "Virtual environment set up at $ENV_LOCAL"
 
 # Ensure project src is importable
 export PYTHONPATH="${PYTHONPATH:-}:$PROJECT_ROOT:$PROJECT_ROOT/src"
+export PYTHONUNBUFFERED=1
 
 # Create logs directory if it doesn't exist
 mkdir -p "$PROJECT_ROOT/logs"
