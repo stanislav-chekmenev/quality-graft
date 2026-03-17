@@ -80,12 +80,14 @@ class QualityGraftDataModule(PDBLightningDataModule):
         boltz_config: Dict[str, Any],
         num_plddt_bins: int = 50,
         local_only: bool = False,
+        reprocess_boltz: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.boltz_config = boltz_config
         self.num_plddt_bins = num_plddt_bins
         self.local_only = local_only
+        self.reprocess_boltz = reprocess_boltz
         self.boltz_work_dir = self.data_dir / "boltz_work"
         self.boltz_inputs_dir = self.boltz_work_dir / "inputs"
 
@@ -214,8 +216,13 @@ class QualityGraftDataModule(PDBLightningDataModule):
         )
 
     def prepare_data(self):
-        """Two-pass preprocessing: PyG conversion then Boltz-1 pLDDT labels."""
-        if self.local_only:
+        """Two-pass preprocessing: PyG conversion then Boltz-1 pLDDT labels.
+
+        When ``reprocess_boltz=True``, skips Pass 1 (PDB download / PyG
+        conversion) and re-runs Pass 2 (Boltz prediction) on **all**
+        structures, overwriting existing pLDDT/logit data.
+        """
+        if self.local_only and not self.reprocess_boltz:
             # Data already preprocessed — skip all preprocessing.
             if not self.processed_dir.exists() or not any(self.processed_dir.glob("*.pt")):
                 raise RuntimeError(
@@ -229,8 +236,9 @@ class QualityGraftDataModule(PDBLightningDataModule):
             )
             return
 
-        # Pass 1: parent handles filtering, download, PyG conversion
-        super().prepare_data()
+        if not self.reprocess_boltz:
+            # Pass 1: parent handles filtering, download, PyG conversion
+            super().prepare_data()
 
         # Pass 2: Boltz-1 pLDDT label generation
         pt_files = sorted(self.processed_dir.glob("*.pt"))
@@ -275,7 +283,7 @@ class QualityGraftDataModule(PDBLightningDataModule):
 
         for fname in file_names:
             structure_id = fname.replace(".pt", "")
-            if structure_id in plddt_set:
+            if structure_id in plddt_set and not self.reprocess_boltz:
                 n_skipped += 1
                 continue
             submitted_ids.append(structure_id)
@@ -406,6 +414,14 @@ class QualityGraftDataModule(PDBLightningDataModule):
 
                 graph.plddt = torch.tensor(plddt_np, dtype=torch.float32)
                 graph.plddt_bin = plddt_to_bin(graph.plddt, num_bins=self.num_plddt_bins)
+                if boltz_result.plddt_logits is not None:
+                    graph.plddt_logits = torch.tensor(
+                        boltz_result.plddt_logits, dtype=torch.float32,
+                    )
+                if boltz_result.pde_logits is not None:
+                    graph.pde_logits = torch.tensor(
+                        boltz_result.pde_logits, dtype=torch.float32,
+                    )
                 torch.save(graph, pt_path)
                 chunk_labeled += 1
                 plddt_status[sid] = True

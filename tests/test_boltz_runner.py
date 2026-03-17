@@ -30,6 +30,8 @@ class TestBoltzBatchResult:
         br = BoltzResult(
             structure_id="1ubq_A",
             plddt=np.array([0.8, 0.9]),
+            plddt_logits=None,
+            pde_logits=None,
             confidence_json=None,
             success=True,
             error_msg=None,

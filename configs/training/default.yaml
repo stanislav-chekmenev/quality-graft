@@ -34,6 +34,10 @@ early_stopping:
   mode: max
   patience: 5
 
+# Distillation
+distill_alpha: 0.7         # weight on soft KL loss (0.0 = pure CE, 1.0 = pure KL)
+distill_temperature: 2.0   # softmax temperature for KL divergence
+
 # Checkpoint monitoring
 checkpoint:
   monitor: val/plddt_accuracy
