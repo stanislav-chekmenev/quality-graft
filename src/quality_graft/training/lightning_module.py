@@ -168,7 +168,7 @@ class QualityGraftLightningModule(L.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        if batch_idx == 0:
+        if batch_idx == 0 and self.debug_mode:
             self._log_mode_summary("validation_step_BEFORE_forward", self.global_step)
         outputs = self.model(batch)
         mask = batch["mask"]
