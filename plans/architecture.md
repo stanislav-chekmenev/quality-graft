@@ -610,7 +610,7 @@ graph TD
     subgraph La-Proteina_FROZEN
         LP_IN[PDB: seq + all-atom coords] --> LP_AE[Autoencoder Encoder]
         LP_AE --> LP_Z[z_latent: b,n,8]
-        LP_Z --> LP_FM[Construct FM batch at t=1]
+        LP_Z --> LP_FM[Construct FM batch at t=0.999]
         LP_IN --> LP_FM
         LP_FM --> LP_TRUNK[Trunk: 14 layers]
         LP_TRUNK --> LP_S[trunk_seqs: b,n,768]

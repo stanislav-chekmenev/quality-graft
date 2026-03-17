@@ -16,8 +16,8 @@ device: cpu
 # Whether to use the decoder (Option A: false, Option C: true)
 use_decoder: false
 
-# Flow matching time value (1.0 = clean sample)
-t_value: 1.0
+# Flow matching time value (0.99 = nearly clean sample)
+t_value: 0.99
 
 # Whether to use deterministic encoding (posterior mean vs sampled)
 deterministic_encode: true
