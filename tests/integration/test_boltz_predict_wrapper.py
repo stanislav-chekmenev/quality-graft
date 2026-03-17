@@ -76,6 +76,7 @@ class TestBoltzPredictWrapper:
             str(input_yaml),
             "--out_dir", str(out_dir),
             "--checkpoint", str(CKPT_PATH),
+            "--model", "boltz1",
             "--accelerator", "gpu",
             "--devices", "1",
             "--diffusion_samples", "1",
