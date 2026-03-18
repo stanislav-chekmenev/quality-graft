@@ -109,6 +109,7 @@ def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
         num_workers=data_cfg.num_workers,
         transforms=transforms,
         local_only=data_cfg.get("local_only", False),
+        reprocess_boltz=data_cfg.get("reprocess_boltz", False),
     )
 
 
@@ -166,6 +167,8 @@ def build_lightning_module(cfg: DictConfig, model: QualityGraft) -> QualityGraft
         min_lr=train_cfg.scheduler.min_lr,
         num_plddt_bins=cfg.data.num_plddt_bins,
         debug_mode=train_cfg.get("debug_mode", False),
+        distill_alpha=train_cfg.get("distill_alpha", 0.7),
+        distill_temperature=train_cfg.get("distill_temperature", 2.0),
     )
 
 

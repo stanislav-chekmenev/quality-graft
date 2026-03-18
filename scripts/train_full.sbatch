@@ -35,10 +35,11 @@ fi
 #   tar czf "$PROJECT_ROOT/venv.tar.gz" -C "$PROJECT_ROOT" .venv
 ENV_TARBALL="$PROJECT_ROOT/venv.tar.gz"
 ENV_LOCAL="$DATA_ROOT/.venv"
+REWRITE_ENV=false
 
 echo "Setting up virtual environment on node-local scratch..."
 srun --ntasks=1 bash -c "
-    if [ ! -d \"$ENV_LOCAL/bin\" ]; then
+    if [ ! -d \"$ENV_LOCAL/bin\" ] || [ "$REWRITE_ENV" = true ]; then
         mkdir -p \"$DATA_ROOT\"
         if ! tar xzf \"$ENV_TARBALL\" -C \"$DATA_ROOT\"; then
             echo \"ERROR: Failed to unpack $ENV_TARBALL\" >&2

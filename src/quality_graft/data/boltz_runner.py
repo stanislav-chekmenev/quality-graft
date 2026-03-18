@@ -36,15 +36,18 @@ def _clean_env_for_boltz() -> dict[str, str]:
         ]
         env["PYTHONPATH"] = os.pathsep.join(cleaned)
 
-    # cuequivariance_ops links against libcublas.so.12 which lives in the
-    # pip nvidia-cublas-cu12 package, not on the default library path.
+    # cuequivariance_ops links against CUDA 12 libs (libcublas.so.12,
+    # libnvrtc.so.12) which live in pip nvidia-* packages, not on the
+    # default library path.  Add all nvidia lib dirs we can find.
     try:
-        import nvidia.cublas.lib as _cublas_lib
-        if _cublas_lib.__file__ is not None:
-            cublas_dir = str(Path(_cublas_lib.__file__).parent)
+        import nvidia
+        nvidia_root = Path(nvidia.__path__[0])
+        lib_dirs = sorted({str(p.parent) for p in nvidia_root.rglob("lib/*.so*")})
+        if lib_dirs:
             ld_path = env.get("LD_LIBRARY_PATH", "")
-            if cublas_dir not in ld_path:
-                env["LD_LIBRARY_PATH"] = cublas_dir + (os.pathsep + ld_path if ld_path else "")
+            extra = os.pathsep.join(d for d in lib_dirs if d not in ld_path)
+            if extra:
+                env["LD_LIBRARY_PATH"] = extra + (os.pathsep + ld_path if ld_path else "")
     except ImportError:
         pass
 
@@ -317,6 +320,7 @@ def run_boltz_predict(
                 structure_id=structure_id,
                 plddt=None,
                 plddt_logits=None,
+                pde_logits=None,
                 confidence_json=None,
                 success=False,
                 error_msg=f"pLDDT npz not found in {out_dir}",
@@ -358,6 +362,7 @@ def run_boltz_predict(
             structure_id=structure_id,
             plddt=None,
             plddt_logits=None,
+            pde_logits=None,
             confidence_json=None,
             success=False,
             error_msg=str(e),

@@ -19,9 +19,7 @@ used as a drop-in replacement in ``QualityGraft``.
 
 from __future__ import annotations
 
-import torch
 from torch import Tensor, nn
-
 from boltz.model.modules.trunk import PairformerModule
 
 
