@@ -6,7 +6,7 @@ optimizer:
 
 scheduler:
   type: linear
-  warmup_steps: 200
+  warmup_steps: 1000
   min_lr: 1.0e-6
 
 # Trainer & data configuration
@@ -35,6 +35,7 @@ early_stopping:
   patience: 5
 
 # Distillation
+distillation: false        # set true to use teacher logits (plddt_logits in batch)
 distill_alpha: 0.7         # weight on soft KL loss (0.0 = pure CE, 1.0 = pure KL)
 distill_temperature: 2.0   # softmax temperature for KL divergence
 

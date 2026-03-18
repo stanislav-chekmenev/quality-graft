@@ -2,10 +2,10 @@
 #SBATCH --job-name=qg_train
 #SBATCH --partition=h100
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:h100nvl:2
-#SBATCH --ntasks-per-node=2
+#SBATCH --gres=gpu:h100nvl:4
+#SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=20
-#SBATCH --mem=80G
+#SBATCH --mem=160G
 #SBATCH --time=1-00:00:00
 #SBATCH --output=logs/train_full_%j.out
 #SBATCH --error=logs/train_full_%j.err
@@ -20,7 +20,7 @@ echo "==========================================="
 # --- Environment ---
 PROJECT_ROOT="/mnt/labs/home/schekmenev/projects/quality-graft"
 
-NUM_DEVICES=2
+NUM_DEVICES=4
 DEVICE_TYPE=h100nvl
 
 if [ "$DEVICE_TYPE" == "rtx6000" ]; then
@@ -35,7 +35,7 @@ fi
 #   tar czf "$PROJECT_ROOT/venv.tar.gz" -C "$PROJECT_ROOT" .venv
 ENV_TARBALL="$PROJECT_ROOT/venv.tar.gz"
 ENV_LOCAL="$DATA_ROOT/.venv"
-REWRITE_ENV=false
+REWRITE_ENV=true
 
 echo "Setting up virtual environment on node-local scratch..."
 srun --ntasks=1 bash -c "
@@ -114,6 +114,7 @@ srun python "$PROJECT_ROOT/scripts/train.py" \
     data.local_only=true \
     data.batch_size=6 \
     data.num_workers=6 \
+    training.distillation=true \
     training.max_length=128 \
     training.min_length=10 \
     training.accelerator=gpu \
@@ -123,7 +124,7 @@ srun python "$PROJECT_ROOT/scripts/train.py" \
     training.max_epochs=100 \
     training.check_val_every_n_epoch=10 \
     training.checkpoint_dir="$TRAIN_CKPT_DIR" \
-    model.adaptor.n_attn_layers=0 \
+    model.adaptor.n_attn_layers=1 \
     model.la_proteina_wrapper.proteina_ckpt_path="$WEIGHT_DIR/LD1_ucond_notri_512.ckpt" \
     model.la_proteina_wrapper.autoencoder_ckpt_path="$WEIGHT_DIR/AE1_ucond_512.ckpt" \
     model.confidence_head.ckpt_path="$WEIGHT_DIR/boltz1_conf.ckpt"

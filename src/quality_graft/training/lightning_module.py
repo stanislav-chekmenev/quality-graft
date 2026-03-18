@@ -47,9 +47,10 @@ class QualityGraftLightningModule(L.LightningModule):
         Minimum learning rate after linear decay.
     num_plddt_bins : int
         Number of pLDDT bins (default 50).
+    distillation : bool
+        Whether to use distillation loss (requires teacher logits in batch).
     distill_alpha : float
         Weight on soft KL loss (0.0 = pure CE, 1.0 = pure KL).
-        Only used when teacher logits are available in the batch.
     distill_temperature : float
         Temperature for softmax in KL divergence.
     """
@@ -64,6 +65,7 @@ class QualityGraftLightningModule(L.LightningModule):
         min_lr: float = 1e-6,
         num_plddt_bins: int = 50,
         debug_mode: bool = False,
+        distillation: bool = False,
         distill_alpha: float = 0.7,
         distill_temperature: float = 2.0,
     ):
@@ -76,6 +78,7 @@ class QualityGraftLightningModule(L.LightningModule):
         self.min_lr = min_lr
         self.num_plddt_bins = num_plddt_bins
         self.debug_mode = debug_mode
+        self.distillation = distillation
         self.distill_alpha = distill_alpha
         self.distill_temperature = distill_temperature
 
@@ -217,7 +220,7 @@ class QualityGraftLightningModule(L.LightningModule):
         if mask.dtype == torch.bool:
             mask = mask.float()
 
-        teacher_logits = batch.get("plddt_logits")
+        teacher_logits = batch.get("plddt_logits") if self.distillation else None
         loss = self._compute_loss(
             outputs["plddt_logits"], batch["plddt_bin"], mask, teacher_logits,
         )
