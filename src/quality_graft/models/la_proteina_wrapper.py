@@ -106,7 +106,7 @@ class LaProteinaWrapper(nn.Module):
         Option C (hybrid trunk + decoder).
     t_value : float
         Flow-matching time value for batch construction.
-        ``t=1.0`` corresponds to the clean sample (no noise added).
+        ``t=0.99`` corresponds to the clean sample (no noise added).
     deterministic_encode : bool
         If ``True``, use the encoder's posterior mean instead of sampling
         from the latent distribution. Useful for deterministic evaluation.
@@ -120,7 +120,7 @@ class LaProteinaWrapper(nn.Module):
         trunk: LocalLatentsTransformer,
         flow_matcher: ProductSpaceFlowMatcher,
         use_decoder: bool = False,
-        t_value: float = 1.0,
+        t_value: float = 0.99,
         deterministic_encode: bool = False,
     ):
         super().__init__()
@@ -145,7 +145,7 @@ class LaProteinaWrapper(nn.Module):
         cls,
         proteina_model: Proteina,  
         use_decoder: bool = False,
-        t_value: float = 1.0,
+        t_value: float = 0.99,
         deterministic_encode: bool = False,
     ) -> "LaProteinaWrapper":
         """Create a wrapper from a loaded ``Proteina`` LightningModule.
@@ -157,7 +157,7 @@ class LaProteinaWrapper(nn.Module):
         use_decoder : bool
             Whether to use the decoder (Option C).
         t_value : float
-            Flow matching time value (1.0 = clean sample).
+            Flow matching time value.
         deterministic_encode : bool
             Whether to use deterministic encoding (posterior mean).
 
