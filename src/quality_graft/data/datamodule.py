@@ -279,13 +279,6 @@ class QualityGraftDataModule(PDBLightningDataModule):
         structures, overwriting existing pLDDT/logit data.
         """
         if self.local_only and not self.reprocess_boltz:
-        """Two-pass preprocessing: PyG conversion then Boltz-1 pLDDT labels.
-
-        When ``reprocess_boltz=True``, skips Pass 1 (PDB download / PyG
-        conversion) and re-runs Pass 2 (Boltz prediction) on **all**
-        structures, overwriting existing pLDDT/logit data.
-        """
-        if self.local_only and not self.reprocess_boltz:
             # Data already preprocessed — skip all preprocessing.
             if not self.processed_dir.exists() or not any(self.processed_dir.glob("*.pt")):
                 raise RuntimeError(
@@ -299,9 +292,6 @@ class QualityGraftDataModule(PDBLightningDataModule):
             )
             return
 
-        if not self.reprocess_boltz:
-            # Pass 1: parent handles filtering, download, PyG conversion
-            super().prepare_data()
         if not self.reprocess_boltz:
             # Pass 1: parent handles filtering, download, PyG conversion
             super().prepare_data()
@@ -349,7 +339,6 @@ class QualityGraftDataModule(PDBLightningDataModule):
 
         for fname in file_names:
             structure_id = fname.replace(".pt", "")
-            if structure_id in plddt_set and not self.reprocess_boltz:
             if structure_id in plddt_set and not self.reprocess_boltz:
                 n_skipped += 1
                 continue
@@ -481,14 +470,6 @@ class QualityGraftDataModule(PDBLightningDataModule):
 
                 graph.plddt = torch.tensor(plddt_np, dtype=torch.float32)
                 graph.plddt_bin = plddt_to_bin(graph.plddt, num_bins=self.num_plddt_bins)
-                if boltz_result.plddt_logits is not None:
-                    graph.plddt_logits = torch.tensor(
-                        boltz_result.plddt_logits, dtype=torch.float32,
-                    )
-                if boltz_result.pde_logits is not None:
-                    graph.pde_logits = torch.tensor(
-                        boltz_result.pde_logits, dtype=torch.float32,
-                    )
                 if boltz_result.plddt_logits is not None:
                     graph.plddt_logits = torch.tensor(
                         boltz_result.plddt_logits, dtype=torch.float32,
