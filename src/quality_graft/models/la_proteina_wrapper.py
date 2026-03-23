@@ -120,7 +120,7 @@ class LaProteinaWrapper(nn.Module):
         trunk: LocalLatentsTransformer,
         flow_matcher: ProductSpaceFlowMatcher,
         use_decoder: bool = False,
-        t_value: float = 1.0,
+        t_value: float = 0.99,
         deterministic_encode: bool = False,
     ):
         super().__init__()
@@ -145,7 +145,7 @@ class LaProteinaWrapper(nn.Module):
         cls,
         proteina_model: Proteina,  
         use_decoder: bool = False,
-        t_value: float = 1.0,
+        t_value: float = 0.99,
         deterministic_encode: bool = False,
     ) -> "LaProteinaWrapper":
         """Create a wrapper from a loaded ``Proteina`` LightningModule.
@@ -157,7 +157,7 @@ class LaProteinaWrapper(nn.Module):
         use_decoder : bool
             Whether to use the decoder (Option C).
         t_value : float
-            Flow matching time value (1.0 = clean sample).
+            Flow matching time value (0.99 = nearly clean sample).
         deterministic_encode : bool
             Whether to use deterministic encoding (posterior mean).
 

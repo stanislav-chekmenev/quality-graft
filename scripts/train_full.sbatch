@@ -4,8 +4,7 @@
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:rtx6000:2
 #SBATCH --ntasks-per-node=2
-#SBATCH --nodes=1
-#SBATCH --cpus-per-task=24
+#SBATCH --cpus-per-task=20
 #SBATCH --mem=80G
 #SBATCH --time=1-00:00:00
 #SBATCH --output=logs/train_full_%j.out

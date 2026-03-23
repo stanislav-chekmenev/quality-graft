@@ -6,6 +6,11 @@ masked pLDDT loss, and validation metrics.
 Supports two loss modes:
 - **Hard targets only**: cross-entropy on pLDDT bin labels (backward-compatible).
 - **Distillation**: combined hard CE + soft KL divergence on teacher logits.
+masked pLDDT loss, and validation metrics.
+
+Supports two loss modes:
+- **Hard targets only**: cross-entropy on pLDDT bin labels (backward-compatible).
+- **Distillation**: combined hard CE + soft KL divergence on teacher logits.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from loguru import logger
 from torch import Tensor
 
 from quality_graft.models.quality_graft import QualityGraft
+from quality_graft.models.student_head import StudentConfidenceHead
 from quality_graft.models.student_head import StudentConfidenceHead
 from quality_graft.training.metrics import (
     plddt_accuracy,
@@ -117,9 +123,22 @@ class QualityGraftLightningModule(L.LightningModule):
             pf = self.model.confidence_head.confidence_module.pairformer_module
             pf_layer0_training = pf.layers[0].training if len(pf.layers) > 0 else None
             parts.append(f"pairformer_layer0.training={pf_layer0_training}")
+        if not self._student_mode:
+            # Check a pairformer layer directly (original BoltzConfidenceHead)
+            pf = self.model.confidence_head.confidence_module.pairformer_module
+            pf_layer0_training = pf.layers[0].training if len(pf.layers) > 0 else None
+            parts.append(f"pairformer_layer0.training={pf_layer0_training}")
 
         logger.info(" | ".join(parts))
 
+    def _compute_loss(
+        self,
+        student_logits: Tensor,
+        plddt_labels: Tensor,
+        mask: Tensor,
+        teacher_logits: Tensor | None = None,
+    ) -> Tensor:
+        """Combined hard + soft distillation loss.
     def _compute_loss(
         self,
         student_logits: Tensor,
@@ -133,7 +152,19 @@ class QualityGraftLightningModule(L.LightningModule):
         ----------
         student_logits : [b, n, num_bins]
             Student's raw logits.
+        student_logits : [b, n, num_bins]
+            Student's raw logits.
         plddt_labels : [b, n] long
+            Hard bin targets.
+        mask : [b, n] float
+            1=valid, 0=padding.
+        teacher_logits : [b, n, num_bins] or None
+            Boltz's raw logits (soft targets). When None, falls back to
+            pure cross-entropy.
+        """
+        # Hard target: cross-entropy (always computed)
+        ce_loss = F.cross_entropy(
+            student_logits.reshape(-1, self.num_plddt_bins),
             Hard bin targets.
         mask : [b, n] float
             1=valid, 0=padding.
@@ -191,6 +222,16 @@ class QualityGraftLightningModule(L.LightningModule):
             self.model.confidence_head.eval()
             self.model.adaptor.train()
 
+
+        if self._student_mode:
+            # Student head is trainable — keep in train mode
+            self.model.adaptor.train()
+            self.model.confidence_head.train()
+        else:
+            # Original frozen Boltz head
+            self.model.confidence_head.eval()
+            self.model.adaptor.train()
+
         if self.debug_mode:
             val_freq = self.trainer.check_val_every_n_epoch or 1
             if self.current_epoch % val_freq == 0 or self.current_epoch < 3:
@@ -198,10 +239,12 @@ class QualityGraftLightningModule(L.LightningModule):
 
     def on_train_batch_start(self, batch, batch_idx):
         """Re-enforce eval() on frozen components."""
+        """Re-enforce eval() on frozen components."""
         needs_fix = False
         if self.model.la_proteina.training:
             self.model.la_proteina.eval()
             needs_fix = True
+        if not self._student_mode and self.model.confidence_head.training:
         if not self._student_mode and self.model.confidence_head.training:
             self.model.confidence_head.eval()
             needs_fix = True
@@ -248,6 +291,7 @@ class QualityGraftLightningModule(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         if batch_idx == 0 and self.debug_mode:
+        if batch_idx == 0 and self.debug_mode:
             self._log_mode_summary("validation_step_BEFORE_forward", self.global_step)
         outputs = self.model(batch)
         mask = batch["mask"]
@@ -256,6 +300,7 @@ class QualityGraftLightningModule(L.LightningModule):
         logits = outputs["plddt_logits"]
         labels = batch["plddt_bin"]
 
+        # Loss (always use hard targets for val to keep metrics comparable)
         # Loss (always use hard targets for val to keep metrics comparable)
         loss = self._compute_loss(logits, labels, mask)
         self.log("val/loss", loss, prog_bar=True, sync_dist=True)
@@ -310,3 +355,4 @@ class QualityGraftLightningModule(L.LightningModule):
         progress = (step - self.warmup_steps) / decay_steps
         min_factor = self.min_lr / self.lr
         return max(1.0 - progress * (1.0 - min_factor), min_factor)
+
