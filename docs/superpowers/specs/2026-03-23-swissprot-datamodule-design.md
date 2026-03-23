@@ -21,7 +21,9 @@ Subclass existing classes (Approach A). No La-Proteina code changes.
 **File:** `src/quality_graft/data/swissprot_selector.py`
 **Class:** `SwissProtDataSelector(PDBDataSelector)`
 
-**Constructor params** (in addition to inherited):
+**Constructor:** Calls `super().__init__()` with all PDB-specific params at their defaults (`molecule_type=None`, `experiment_types=None`, `oligomeric_min=None`, `oligomeric_max=None`, `best_resolution=None`, `worst_resolution=None`, `has_ligands=None`, `remove_ligands=None`, `remove_non_standard_residues=False`, `remove_pdb_unavailable=False`, `labels=None`, `remove_cath_unavailable=False`). Forwards `data_dir`, `fraction`, `min_length`, `max_length`, `exclude_ids`, `exclude_ids_from_file`, `num_workers` to the parent.
+
+**Additional constructor params:**
 - `source_dir: str` — path to shared SwissProt PDB directory
 - `metadata_tsv: str` — path to UniProt TSV file (accession + length)
 - `alphafold_version: int = 4` — for filename pattern matching
@@ -38,6 +40,10 @@ Subclass existing classes (Approach A). No La-Proteina code changes.
 
 No PDBManager, no RCSB queries, no download. Pure metadata + filesystem check.
 
+**Note:** The DataFrame intentionally has no `chain` column — AlphaFold structures are single-chain. Downstream code must call `_process_structure_data(pdb_codes, chains=None)` (not `chains=df["chain"].tolist()`).
+
+**Note:** The DataFrame has no `sequence` column. Sequence-similarity splitting is not supported for SwissProt — only random splitting.
+
 ### 2. SwissProtDataModule
 
 **File:** `src/quality_graft/data/swissprot_datamodule.py`
@@ -46,26 +52,33 @@ No PDBManager, no RCSB queries, no download. Pure metadata + filesystem check.
 **Constructor params** (in addition to inherited):
 - `source_dir: str` — shared SwissProt directory path
 
-`boltz_config` is inherited but ignored — no Boltz pass runs.
+`boltz_config` is accepted by the constructor (inherited from `QualityGraftDataModule`) but is never used — no Boltz pass runs. The `build_data_module()` function passes an empty dict `{}` for SwissProt.
 
 **`prepare_data()` override:**
 1. Call `self.dataselector.create_dataset()` to get filtered DataFrame
 2. Skip download — files are already in `raw/` (copied by the separate script)
-3. Call `_process_structure_data()` (inherited) to convert PDB → PyG `.pt` files
+3. Call `self._process_structure_data(df_data["pdb"].tolist(), chains=None)` — explicitly pass `chains=None` since AlphaFold structures are single-chain and the DataFrame has no `chain` column
 4. No Boltz pass — pLDDT is extracted during processing
 5. Save the filtered DataFrame CSV
+6. **Write `plddt_status.csv`**: After processing, iterate over all successfully created `.pt` files and write one row per structure with `has_plddt=true`. This is critical — the inherited `setup()` filters splits against this CSV, so without it all structures would be filtered out.
 
 **`_load_and_process_pdb()` override:**
-Extends the parent method. After parent creates the PyG graph (which has `graph.bfactor` from `store_bfactor=True`), adds:
+Copies the parent method body (from `PDBLightningDataModule._load_and_process_pdb`) rather than calling `super()` — this avoids double I/O (save + reload + re-save) which matters at 550K scale. The copied method is identical except:
+1. After `graph.bfactor_avg = torch.mean(graph.bfactor, dim=-1)`, adds:
 ```python
 graph.plddt = graph.bfactor_avg / 100.0        # B-factor is pLDDT on 0-100 scale
 graph.plddt_bin = plddt_to_bin(graph.plddt)     # bin to 0..49
 graph.plddt_logits = None                       # no logits (hard targets only)
+graph.database = "swissprot"                    # distinguish from PDB data source
 ```
+2. The `torch.save(graph, ...)` at the end saves the fully labeled graph in one pass.
 
-Every `.pt` file comes out of processing already labeled. The `plddt_status.csv` tracking is still written so `setup()` filtering works unchanged.
+Every `.pt` file comes out of processing already labeled — no second pass needed.
 
-**`setup()` and `_get_dataset()`** — inherited as-is.
+**`_get_file_identifier()` override:**
+Returns a SwissProt-specific string: `df_swissprot_f{fraction}_minl{min_length}_maxl{max_length}` — avoids the parent's long string with many `None` PDB-specific values.
+
+**`setup()` and `_get_dataset()`** — inherited as-is from `QualityGraftDataModule`. The pLDDT filtering in `setup()` works because `plddt_status.csv` is populated during `prepare_data()`.
 
 **File naming convention:** `AF-A0A009IHW8-F1-model_v4` as the `pdb` code throughout. Raw: `AF-A0A009IHW8-F1-model_v4.pdb`, processed: `AF-A0A009IHW8-F1-model_v4.pt`.
 
@@ -126,7 +139,7 @@ database: swissprot
 
 **`scripts/train.py` `build_data_module()` changes:**
 - Check `data_cfg.get("database", "pdb")`
-- If `"swissprot"`: instantiate `SwissProtDataSelector` + `SwissProtDataModule`
+- If `"swissprot"`: instantiate `SwissProtDataSelector` + `SwissProtDataModule`, pass `boltz_config={}` (empty dict — never used but required by parent constructor)
 - If `"pdb"`: existing path (unchanged)
 
 **One-time metadata download:** `scripts/download_uniprot_tsv.py`
@@ -161,7 +174,7 @@ _load_and_process_pdb()  ──► .pt files with plddt from B-factor
 
 - **No La-Proteina changes.** All new code is in `src/quality_graft/data/` and `scripts/`.
 - **pLDDT from B-factors.** AlphaFold stores pLDDT as B-factor (0-100). Divided by 100 to match existing 0-1 scale. Binned with existing `plddt_to_bin()`.
-- **Hard targets only.** `graph.plddt_logits = None` — the training loss must handle this (cross-entropy on `plddt_bin` instead of KL on logits).
+- **Hard targets only.** `graph.plddt_logits = None`. The existing `_compute_loss()` in `QualityGraftLightningModule` already handles `teacher_logits=None` by falling back to pure cross-entropy (line 150-151 of `lightning_module.py`). No loss code changes needed.
 - **Idempotent copy.** The copy script only transfers missing files, safe to re-run.
 - **Format is PDB, not CIF.** `_prepare_boltz_yaml()` (CIF parsing) is never called.
 
