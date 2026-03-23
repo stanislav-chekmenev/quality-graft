@@ -106,7 +106,7 @@ class LaProteinaWrapper(nn.Module):
         Option C (hybrid trunk + decoder).
     t_value : float
         Flow-matching time value for batch construction.
-        ``t=1.0`` corresponds to the clean sample (no noise added).
+        ``t=0.99`` corresponds to the clean sample (no noise added).
     deterministic_encode : bool
         If ``True``, use the encoder's posterior mean instead of sampling
         from the latent distribution. Useful for deterministic evaluation.
@@ -157,7 +157,7 @@ class LaProteinaWrapper(nn.Module):
         use_decoder : bool
             Whether to use the decoder (Option C).
         t_value : float
-            Flow matching time value (0.99 = nearly clean sample).
+            Flow matching time value.
         deterministic_encode : bool
             Whether to use deterministic encoding (posterior mean).
 

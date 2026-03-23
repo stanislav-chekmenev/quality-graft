@@ -16,7 +16,6 @@ logs
 
 # Outputs
 outputs
-plots
 
 # Data (top-level only, not src/boltz/data/)
 /data/

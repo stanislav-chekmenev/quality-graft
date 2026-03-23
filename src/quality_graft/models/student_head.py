@@ -19,7 +19,6 @@ used as a drop-in replacement in ``QualityGraft``.
 
 from __future__ import annotations
 
-import torch
 from torch import Tensor, nn
 
 from boltz.model.modules.trunk import PairformerModule
@@ -142,6 +141,7 @@ class StudentConfidenceHead(nn.Module):
         }
 
         if self.predict_pde:
+            z = self.final_z_norm(z)
             outputs["pde_logits"] = self.to_pde_logits(z + z.transpose(1, 2))
 
         if self.predict_resolved:

@@ -4,7 +4,8 @@
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:h100nvl:2
 #SBATCH --ntasks-per-node=2
-#SBATCH --cpus-per-task=20
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=24
 #SBATCH --mem=80G
 #SBATCH --time=1-00:00:00
 #SBATCH --output=logs/train_full_%j.out
