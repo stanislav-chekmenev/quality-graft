@@ -1,0 +1,19 @@
+# SwissProt AlphaFold data configuration
+data_dir: data/swissprot/
+source_dir: /mnt/labs/shared/databases/swissprot_pdb_v4/files
+metadata_tsv: data/swissprot/uniprot_metadata.tsv
+alphafold_version: 4
+max_length: ${training.max_length}
+min_length: ${training.min_length}
+format: pdb
+local_only: false
+num_plddt_bins: 50
+train_val_test: [0.8, 0.15, 0.05]
+batch_size: ${training.batch_size}
+num_workers: ${training.num_workers}
+fraction: 1.0
+exclude_ids: null
+exclude_ids_from_file: null
+selector_num_workers: 32
+split_type: random  # sequence_similarity not supported (no sequence column)
+database: swissprot

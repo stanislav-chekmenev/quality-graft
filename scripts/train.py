@@ -47,6 +47,8 @@ from la_proteina.proteinfoundation.datasets.pdb_data import (
 )
 import la_proteina.proteinfoundation.datasets.transforms as lp_transforms
 from quality_graft.data.datamodule import QualityGraftDataModule
+from quality_graft.data.swissprot_selector import SwissProtDataSelector
+from quality_graft.data.swissprot_datamodule import SwissProtDataModule
 from quality_graft.data.wandb_logger import collect_dataset_stats, log_dataset_summary
 
 from quality_graft.models.confidence_head import BoltzConfidenceHead
@@ -66,8 +68,62 @@ class TransformWrapper:
         return self._call(None, data)
 
 
-def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
+def build_data_module(cfg: DictConfig):
     """Build the data module from Hydra config."""
+    data_cfg = cfg.data
+    database = data_cfg.get("database", "pdb")
+
+    if database == "swissprot":
+        return _build_swissprot_data_module(data_cfg)
+    else:
+        return _build_pdb_data_module(cfg)
+
+
+def _build_swissprot_data_module(data_cfg: DictConfig) -> SwissProtDataModule:
+    """Build SwissProtDataModule from config."""
+    split_type = data_cfg.get("split_type", "random")
+    if split_type != "random":
+        raise ValueError(
+            f"SwissProt only supports split_type='random', got '{split_type}'. "
+            "Sequence-similarity splitting requires a sequence column."
+        )
+
+    dataselector = SwissProtDataSelector(
+        data_dir=data_cfg.data_dir,
+        source_dir=data_cfg.source_dir,
+        metadata_tsv=data_cfg.metadata_tsv,
+        alphafold_version=data_cfg.get("alphafold_version", 4),
+        fraction=data_cfg.get("fraction", 1.0),
+        min_length=data_cfg.min_length,
+        max_length=data_cfg.max_length,
+        exclude_ids=data_cfg.get("exclude_ids", None),
+        exclude_ids_from_file=data_cfg.get("exclude_ids_from_file", None),
+        num_workers=data_cfg.get("selector_num_workers", 32),
+    )
+    datasplitter = PDBDataSplitter(
+        data_dir=data_cfg.data_dir,
+        train_val_test=list(data_cfg.train_val_test),
+    )
+    transforms = [
+        TransformWrapper(lp_transforms.CoordsToNanometers),
+        TransformWrapper(lp_transforms.CenterStructureTransform),
+    ]
+    return SwissProtDataModule(
+        data_dir=data_cfg.data_dir,
+        source_dir=data_cfg.source_dir,
+        dataselector=dataselector,
+        datasplitter=datasplitter,
+        format="pdb",
+        boltz_config={},
+        num_plddt_bins=data_cfg.num_plddt_bins,
+        batch_size=data_cfg.batch_size,
+        num_workers=data_cfg.num_workers,
+        transforms=transforms,
+    )
+
+
+def _build_pdb_data_module(cfg: DictConfig) -> QualityGraftDataModule:
+    """Build QualityGraftDataModule for PDB data (existing path)."""
     data_cfg = cfg.data
 
     if data_cfg.get("local_only", False):
