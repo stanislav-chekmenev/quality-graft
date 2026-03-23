@@ -8,14 +8,14 @@ token_s: 384
 token_z: 128
 
 # Pairformer architecture
-num_blocks: 4            # 4 blocks ≈ 10.8M + heads ≈ ~11.2M total
-num_heads: 16
-dropout: 0.2
-pairwise_head_width: 32
-pairwise_num_heads: 4
+num_blocks: 1            
+num_heads: 8
+dropout: 0.5
+pairwise_head_width: 16
+pairwise_num_heads: 2
 
 # Prediction heads
 num_plddt_bins: 50
 num_pde_bins: 64
-predict_pde: true         # multi-task regularization
-predict_resolved: true    # multi-task regularization
+predict_pde: false         # multi-task regularization
+predict_resolved: false    # multi-task regularization

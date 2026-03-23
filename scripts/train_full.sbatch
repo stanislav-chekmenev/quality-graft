@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=qg_train
-#SBATCH --partition=h100
+#SBATCH --job-name=boltz_distill
+#SBATCH --partition=gpu
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:h100nvl:4
-#SBATCH --ntasks-per-node=4
-#SBATCH --cpus-per-task=20
-#SBATCH --mem=160G
+#SBATCH --gres=gpu:rtx6000:2
+#SBATCH --ntasks-per-node=2
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=24
+#SBATCH --mem=80G
 #SBATCH --time=1-00:00:00
 #SBATCH --output=logs/train_full_%j.out
 #SBATCH --error=logs/train_full_%j.err
@@ -20,8 +21,8 @@ echo "==========================================="
 # --- Environment ---
 PROJECT_ROOT="/mnt/labs/home/schekmenev/projects/quality-graft"
 
-NUM_DEVICES=4
-DEVICE_TYPE=h100nvl
+NUM_DEVICES=2
+DEVICE_TYPE=rtx6000
 
 if [ "$DEVICE_TYPE" == "rtx6000" ]; then
     DATA_ROOT="/scratch/schekmenev"
@@ -78,8 +79,18 @@ echo "GPUs: ${NUM_DEVICES}x $DEVICE_TYPE"
 
 mkdir -p "$DATA_DIR"
 echo "Staging data to scratch..."
-cp -r "$DATA_SRC/processed" "$DATA_DIR/"
-cp "$DATA_SRC"/*.csv "$DATA_DIR/" 2>/dev/null || true
+STAGE_DATA=true
+
+# Copy processed files if not already staged (assumes processed/ contains .pt files)
+if [ -d "$DATA_DIR/processed" ] && \
+    [ "$(find "$DATA_DIR/processed" -name "*.pt" | wc -l)" -gt 0 ] && \
+    [ "$STAGE_DATA" = false ]; then
+    echo "Data already staged at $DATA_DIR/processed, skipping copy."
+else
+    cp -r "$DATA_SRC/processed" "$DATA_DIR/"
+    cp "$DATA_SRC"/*.csv "$DATA_DIR/" 2>/dev/null || true
+fi
+
 N_PT=$(find "$DATA_DIR/processed" -name "*.pt" | wc -l)
 echo "Staged $N_PT .pt files to $DATA_DIR/processed"
 if [ "$N_PT" -eq 0 ]; then
@@ -112,8 +123,8 @@ srun python "$PROJECT_ROOT/scripts/train.py" \
     mode=train \
     data.data_dir="$DATA_DIR" \
     data.local_only=true \
-    data.batch_size=6 \
-    data.num_workers=6 \
+    data.batch_size=18 \
+    data.num_workers=18 \
     training.distillation=true \
     training.max_length=128 \
     training.min_length=10 \
@@ -122,12 +133,12 @@ srun python "$PROJECT_ROOT/scripts/train.py" \
     training.strategy=ddp \
     training.precision=bf16-mixed \
     training.max_epochs=100 \
-    training.check_val_every_n_epoch=10 \
+    training.check_val_every_n_epoch=5 \
     training.checkpoint_dir="$TRAIN_CKPT_DIR" \
     model.adaptor.n_attn_layers=1 \
     model.la_proteina_wrapper.proteina_ckpt_path="$WEIGHT_DIR/LD1_ucond_notri_512.ckpt" \
     model.la_proteina_wrapper.autoencoder_ckpt_path="$WEIGHT_DIR/AE1_ucond_512.ckpt" \
-    model.confidence_head.ckpt_path="$WEIGHT_DIR/boltz1_conf.ckpt"
+    model/confidence_head=student
 
 # Copy latest run checkpoints back to project root
 LATEST_RUN=$(ls -1td "$TRAIN_CKPT_DIR"/*/ 2>/dev/null | head -1)

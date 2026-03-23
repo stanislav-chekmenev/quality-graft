@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=reprocess_boltz
+#SBATCH --job-name=128_192ds
 #SBATCH --partition=gpu
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:rtx6000:1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=24
-#SBATCH --time=24:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=4-00:00:00
 #SBATCH --output=logs/preprocess_full_%j.out
 #SBATCH --error=logs/preprocess_full_%j.err
 
@@ -38,6 +39,7 @@ REWRITE_ENV=true
 
 if [ ! -d "$ENV_LOCAL/bin" ] || [ "$REWRITE_ENV" = true ]; then
     mkdir -p "$DATA_ROOT"
+    rm -rf "$ENV_LOCAL"
     if ! tar xzf "$ENV_TARBALL" -C "$DATA_ROOT"; then
         echo "ERROR: Failed to unpack $ENV_TARBALL" >&2
         exit 1
@@ -60,7 +62,7 @@ NUM_DEVICES=1
 
 mkdir -p "$PROJECT_ROOT/logs"
 
-SCRATCH_DIR="$DATA_ROOT/monomers_max_len_128_plddt_boltz_full"
+SCRATCH_DIR="$DATA_ROOT/monomers_len_128_192_plddt_boltz"
 mkdir -p "$SCRATCH_DIR"
 echo "Data directory: $SCRATCH_DIR"
 
@@ -73,10 +75,10 @@ echo "Weight staging complete."
 
 # ── NCCL tuning (critical for multi-GPU stability) ────────────────
 export NCCL_DEBUG=INFO
-export NCCL_IB_DISABLE=1           # Disable InfiniBand if not available
+export NCCL_IB_DISABLE=0           # Disable InfiniBand if not available
 export NCCL_SOCKET_IFNAME=eth0     # Restrict NCCL to Ethernet interfaces 
-export NCCL_P2P_DISABLE=1          # Force SHM instead of P2P 
-export NCCL_SHM_DISABLE=0          # Ensure shared memory transport is enabled
+export NCCL_P2P_DISABLE=0          # Force SHM instead of P2P 
+export NCCL_SHM_DISABLE=1          # Ensure shared memory transport is enabled
 
 # Hydra debug
 export HYDRA_FULL_ERROR=1         # Show full stack traces for Hydra errors
@@ -103,13 +105,13 @@ python "$PROJECT_ROOT/scripts/train.py" \
     data.boltz.num_devices=$NUM_DEVICES \
     data.boltz.chunk_size=5 \
     data.boltz.max_parallel_samples=5 \
-    data.boltz.sampling_steps=50 \
+    data.boltz.sampling_steps=25 \
     data.boltz.recycling_steps=1 \
-    data.boltz.num_workers=4 \
+    data.boltz.num_workers=8 \
     data.boltz.preprocessing_threads=12 \
     data.boltz.timeout_per_structure=120 \
-    training.max_length=128 \
-    training.min_length=10
+    training.max_length=192 \
+    training.min_length=128
 
 # Copy results to my data dir in the Bronstein group
 echo "Copying results to group data directory..."

@@ -30,6 +30,48 @@ from quality_graft.data.plddt_utils import plddt_to_bin
 
 PLDDT_STATUS_FILE = "plddt_status.csv"
 
+# Attributes with [N, N, ...] shapes that DensePaddingDataLoader can't collate.
+_UNCOLLATABLE_ATTRS = ("pde_logits",)
+
+
+class _StripAttrsDataset(torch.utils.data.Dataset):
+    """Wraps a dataset to remove attributes that can't be densely padded
+    and optionally filter out samples missing plddt_logits."""
+
+    def __init__(self, dataset, attrs=_UNCOLLATABLE_ATTRS, require_plddt_logits: bool = False):
+        self.dataset = dataset
+        self.attrs = attrs
+
+        if require_plddt_logits:
+            valid = []
+            for i in range(len(dataset)):
+                data = dataset[i]
+                if hasattr(data, "plddt_logits") and data.plddt_logits is not None:
+                    valid.append(i)
+            n_dropped = len(dataset) - len(valid)
+            if n_dropped > 0:
+                logger.warning(
+                    "Dropped {}/{} samples missing plddt_logits.",
+                    n_dropped, len(dataset),
+                )
+            self._valid_indices = valid
+        else:
+            self._valid_indices = None
+
+    def __len__(self):
+        if self._valid_indices is not None:
+            return len(self._valid_indices)
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        if self._valid_indices is not None:
+            idx = self._valid_indices[idx]
+        data = self.dataset[idx]
+        for attr in self.attrs:
+            if hasattr(data, attr):
+                delattr(data, attr)
+        return data
+
 
 def _load_plddt_status(path: Path) -> Dict[str, bool]:
     """Load plddt_status.csv into {structure_id: has_plddt} dict."""
@@ -81,6 +123,7 @@ class QualityGraftDataModule(PDBLightningDataModule):
         num_plddt_bins: int = 50,
         local_only: bool = False,
         reprocess_boltz: bool = False,
+        distillation: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -88,6 +131,7 @@ class QualityGraftDataModule(PDBLightningDataModule):
         self.num_plddt_bins = num_plddt_bins
         self.local_only = local_only
         self.reprocess_boltz = reprocess_boltz
+        self.distillation = distillation
         self.boltz_work_dir = self.data_dir / "boltz_work"
         self.boltz_inputs_dir = self.boltz_work_dir / "inputs"
 
@@ -132,6 +176,18 @@ class QualityGraftDataModule(PDBLightningDataModule):
                     "Val split is empty. Using train split for validation (debug mode)."
                 )
                 self.val_ds = self.train_ds
+
+        # Strip [N,N,...] attributes that DensePaddingDataLoader can't collate
+        # and filter out samples missing plddt_logits when distilling
+        if stage in ("fit", None):
+            if self.train_ds is not None:
+                self.train_ds = _StripAttrsDataset(
+                    self.train_ds, require_plddt_logits=self.distillation,
+                )
+            if self.val_ds is not None:
+                self.val_ds = _StripAttrsDataset(
+                    self.val_ds, require_plddt_logits=self.distillation,
+                )
 
     def _setup_local_only(self, stage=None):
         """Setup for local_only mode: build DataFrame from plddt_status.csv.
@@ -469,6 +525,21 @@ class QualityGraftDataModule(PDBLightningDataModule):
         except Exception as e:
             logger.warning("[{}] CIF parse failed: {}", structure_id, e)
             return None
+
+        # Filter to the target chain so Boltz predicts single-chain pLDDT
+        # matching the per-chain La-Proteina .pt files.
+        parts = structure_id.split("_", 1)
+        if len(parts) > 1:
+            chain_id = parts[1]
+            target = [c for c in chains if c.chain_id == chain_id]
+            if not target:
+                logger.warning(
+                    "[{}] chain '{}' not found in CIF (available: {}), skipping.",
+                    structure_id, chain_id,
+                    [c.chain_id for c in chains],
+                )
+                return None
+            chains = target
 
         use_msa = self.boltz_config.get("use_msa_server", False)
         yaml_content = chains_to_boltz_yaml(chains, use_msa=use_msa)

@@ -164,6 +164,20 @@ class QualityGraftLightningModule(L.LightningModule):
         alpha = self.distill_alpha
         return (1 - alpha) * ce_loss + alpha * kl_loss
 
+    def _kl_plddt(
+        self,
+        student_logits: Tensor,
+        teacher_logits: Tensor,
+        mask: Tensor,
+    ) -> Tensor:
+        """KL divergence between student and teacher pLDDT logits."""
+        T = self.distill_temperature
+        student_log_probs = F.log_softmax(student_logits / T, dim=-1)
+        teacher_probs = F.softmax(teacher_logits / T, dim=-1)
+        kl = F.kl_div(student_log_probs, teacher_probs, reduction="none").sum(dim=-1)
+        kl = (kl * mask).sum() / mask.sum().clamp(min=1)
+        return kl * (T ** 2)
+
     def on_train_epoch_start(self):
         """Keep frozen components in eval() after Lightning's model.train()."""
         self.model.la_proteina.eval()
@@ -225,6 +239,11 @@ class QualityGraftLightningModule(L.LightningModule):
             outputs["plddt_logits"], batch["plddt_bin"], mask, teacher_logits,
         )
         self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
+
+        if self.distillation and teacher_logits is not None:
+            kl = self._kl_plddt(outputs["plddt_logits"], teacher_logits, mask)
+            self.log("train/kl_plddt", kl, on_step=True, on_epoch=False, sync_dist=True)
+
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -240,6 +259,11 @@ class QualityGraftLightningModule(L.LightningModule):
         # Loss (always use hard targets for val to keep metrics comparable)
         loss = self._compute_loss(logits, labels, mask)
         self.log("val/loss", loss, prog_bar=True, sync_dist=True)
+
+        teacher_logits = batch.get("plddt_logits")
+        if self.distillation and teacher_logits is not None:
+            kl = self._kl_plddt(logits, teacher_logits, mask)
+            self.log("val/kl_plddt", kl, sync_dist=True)
 
         # Metrics
         acc = plddt_accuracy(logits, labels, mask)

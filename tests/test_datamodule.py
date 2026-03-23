@@ -185,7 +185,8 @@ class TestPrepareYamlOutputDir:
                 boltz_config={"use_msa_server": False},
             )
 
-            with patch("quality_graft.data.datamodule.parse_cif_chains", return_value=[{"sequence": "ACGT"}]), \
+            mock_chain = MagicMock(chain_id="A", sequence="ACGT", n_residues=4)
+            with patch("quality_graft.data.datamodule.parse_cif_chains", return_value=[mock_chain]), \
                  patch("quality_graft.data.datamodule.chains_to_boltz_yaml", return_value="dummy_yaml"):
                 result = dm._prepare_boltz_yaml("test_A", "test", output_dir=custom_dir)
 
@@ -209,7 +210,8 @@ class TestPrepareYamlOutputDir:
                 boltz_config={"use_msa_server": False},
             )
 
-            with patch("quality_graft.data.datamodule.parse_cif_chains", return_value=[{"sequence": "ACGT"}]), \
+            mock_chain = MagicMock(chain_id="A", sequence="ACGT", n_residues=4)
+            with patch("quality_graft.data.datamodule.parse_cif_chains", return_value=[mock_chain]), \
                  patch("quality_graft.data.datamodule.chains_to_boltz_yaml", return_value="dummy_yaml"):
                 result = dm._prepare_boltz_yaml("test_A", "test")
 

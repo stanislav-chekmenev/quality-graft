@@ -4,7 +4,7 @@ max_length: ${training.max_length}
 min_length: ${training.min_length}
 molecule_type: protein
 oligomeric_min: 1
-oligomeric_max: 1
+oligomeric_max: 4
 format: cif
 local_only: false
 reprocess_boltz: false
