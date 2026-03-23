@@ -55,12 +55,16 @@ No PDBManager, no RCSB queries, no download. Pure metadata + filesystem check.
 `boltz_config` is accepted by the constructor (inherited from `QualityGraftDataModule`) but is never used — no Boltz pass runs. The `build_data_module()` function passes an empty dict `{}` for SwissProt.
 
 **`prepare_data()` override:**
-1. Call `self.dataselector.create_dataset()` to get filtered DataFrame
+This method **completely replaces** the parent chain — it must NOT call `super().prepare_data()` (which would trigger Boltz-1 prediction from `QualityGraftDataModule`).
+
+Steps:
+1. Call `self.dataselector.create_dataset()` to get filtered DataFrame. If zero results, raise `ValueError`.
 2. Skip download — files are already in `raw/` (copied by the separate script)
 3. Call `self._process_structure_data(df_data["pdb"].tolist(), chains=None)` — explicitly pass `chains=None` since AlphaFold structures are single-chain and the DataFrame has no `chain` column
 4. No Boltz pass — pLDDT is extracted during processing
-5. Save the filtered DataFrame CSV
+5. Save the filtered DataFrame CSV using `_get_file_identifier()` for the filename
 6. **Write `plddt_status.csv`**: After processing, iterate over all successfully created `.pt` files and write one row per structure with `has_plddt=true`. This is critical — the inherited `setup()` filters splits against this CSV, so without it all structures would be filtered out.
+7. Log summary: N structures processed, N failed (parse errors are silently skipped and logged as warnings by the inherited `_process_structure_data`).
 
 **`_load_and_process_pdb()` override:**
 Copies the parent method body (from `PDBLightningDataModule._load_and_process_pdb`) rather than calling `super()` — this avoids double I/O (save + reload + re-save) which matters at 550K scale. The copied method is identical except:
@@ -77,8 +81,13 @@ Every `.pt` file comes out of processing already labeled — no second pass need
 
 **Maintenance note:** The copied `_load_and_process_pdb` body creates a coupling with the parent in `pdb_data.py` (lines ~628-704). If the parent method changes, the SwissProt copy may silently diverge. The implementation should include a comment referencing the parent method source.
 
-**`_get_file_identifier()` override:**
-Returns a SwissProt-specific string: `df_swissprot_f{fraction}_minl{min_length}_maxl{max_length}` — avoids the parent's long string with many `None` PDB-specific values.
+**`_get_file_identifier(self, ds)` override:**
+Must accept the `ds` parameter to match the parent signature (called as `self._get_file_identifier(self.dataselector)` from both `prepare_data()` and `setup()`). Returns a SwissProt-specific string:
+```python
+def _get_file_identifier(self, ds):
+    return f"df_swissprot_f{ds.fraction}_minl{ds.min_length}_maxl{ds.max_length}"
+```
+Avoids the parent's long string with many `None` PDB-specific values.
 
 **`setup()` and `_get_dataset()`** — inherited as-is from `QualityGraftDataModule`. The pLDDT filtering in `setup()` works because `plddt_status.csv` is populated during `prepare_data()`.
 
@@ -141,9 +150,46 @@ database: swissprot
 ```
 
 **`scripts/train.py` `build_data_module()` changes:**
-- Check `data_cfg.get("database", "pdb")`
-- If `"swissprot"`: instantiate `SwissProtDataSelector` + `SwissProtDataModule`, pass `boltz_config={}` (empty dict — never used but required by parent constructor)
-- If `"pdb"`: existing path (unchanged)
+
+Branch on `data_cfg.get("database", "pdb")`. If `"pdb"`: existing path (unchanged). If `"swissprot"`:
+
+```python
+if database == "swissprot":
+    dataselector = SwissProtDataSelector(
+        data_dir=data_cfg.data_dir,
+        source_dir=data_cfg.source_dir,
+        metadata_tsv=data_cfg.metadata_tsv,
+        alphafold_version=data_cfg.get("alphafold_version", 4),
+        fraction=data_cfg.get("fraction", 1.0),
+        min_length=data_cfg.min_length,
+        max_length=data_cfg.max_length,
+        exclude_ids=data_cfg.get("exclude_ids", None),
+        exclude_ids_from_file=data_cfg.get("exclude_ids_from_file", None),
+        num_workers=data_cfg.get("selector_num_workers", 32),
+    )
+    datasplitter = PDBDataSplitter(
+        data_dir=data_cfg.data_dir,
+        train_val_test=list(data_cfg.train_val_test),
+    )
+    transforms = [
+        TransformWrapper(lp_transforms.CoordsToNanometers),
+        TransformWrapper(lp_transforms.CenterStructureTransform),
+    ]
+    return SwissProtDataModule(
+        data_dir=data_cfg.data_dir,
+        source_dir=data_cfg.source_dir,
+        dataselector=dataselector,
+        datasplitter=datasplitter,
+        format="pdb",
+        boltz_config={},  # empty — never used but required by parent
+        num_plddt_bins=data_cfg.num_plddt_bins,
+        batch_size=data_cfg.batch_size,
+        num_workers=data_cfg.num_workers,
+        transforms=transforms,
+    )
+```
+
+Note: the same `CoordsToNanometers` and `CenterStructureTransform` transforms are applied as in the PDB path.
 
 **One-time metadata download:** `scripts/download_uniprot_tsv.py`
 - Fetches `https://rest.uniprot.org/uniprotkb/stream?format=tsv&query=(reviewed:true)&fields=accession,length`
@@ -180,6 +226,13 @@ _load_and_process_pdb()  ──► .pt files with plddt from B-factor
 - **Hard targets only.** `graph.plddt_logits = None`. The existing `_compute_loss()` in `QualityGraftLightningModule` already handles `teacher_logits=None` by falling back to pure cross-entropy (line 150-151 of `lightning_module.py`). No loss code changes needed.
 - **Idempotent copy.** The copy script only transfers missing files, safe to re-run.
 - **Format is PDB, not CIF.** `_prepare_boltz_yaml()` (CIF parsing) is never called.
+
+## Known Limitations & Edge Cases
+
+- **`local_only=True` not supported for SwissProt.** The inherited `_setup_local_only()` splits filenames on `_` to extract pdb/chain, which misparses SwissProt names (e.g. `AF-A0A009IHW8-F1-model_v4` → `chain="v4"`). The config sets `local_only: false`. If local-only mode is needed later, `_setup_local_only()` must be overridden.
+- **`overwrite` flag.** The inherited `overwrite` flag is respected by `_process_structure_data()` (which skips existing `.pt` files). The `prepare_data()` override also checks if the DataFrame CSV already exists and skips re-processing if `overwrite=False`.
+- **`in_memory=False` always.** At 550K structures, `in_memory=True` would exhaust memory. The config does not set it (defaults to `False`).
+- **Parse failures.** PDB files that fail during `protein_to_pyg` conversion are silently skipped (logged as warnings). These structures will not appear in `plddt_status.csv` and will be excluded from training.
 
 ## Files Created/Modified
 
