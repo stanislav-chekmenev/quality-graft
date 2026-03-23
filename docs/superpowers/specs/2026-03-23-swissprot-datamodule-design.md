@@ -75,6 +75,8 @@ graph.database = "swissprot"                    # distinguish from PDB data sour
 
 Every `.pt` file comes out of processing already labeled — no second pass needed.
 
+**Maintenance note:** The copied `_load_and_process_pdb` body creates a coupling with the parent in `pdb_data.py` (lines ~628-704). If the parent method changes, the SwissProt copy may silently diverge. The implementation should include a comment referencing the parent method source.
+
 **`_get_file_identifier()` override:**
 Returns a SwissProt-specific string: `df_swissprot_f{fraction}_minl{min_length}_maxl{max_length}` — avoids the parent's long string with many `None` PDB-specific values.
 
@@ -134,6 +136,7 @@ fraction: 1.0
 exclude_ids: null
 exclude_ids_from_file: null
 selector_num_workers: 32
+split_type: random  # sequence_similarity not supported (no sequence column)
 database: swissprot
 ```
 
