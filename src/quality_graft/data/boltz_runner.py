@@ -10,15 +10,11 @@ import json
 import os
 import subprocess
 import sys
-import sys
 from dataclasses import dataclass
 from loguru import logger
 from pathlib import Path
 
 import numpy as np
-
-# Path to the wrapper script that patches Boltz to save logits.
-_WRAPPER_SCRIPT = Path(__file__).parent / "boltz_predict_wrapper.py"
 
 # Path to the wrapper script that patches Boltz to save logits.
 _WRAPPER_SCRIPT = Path(__file__).parent / "boltz_predict_wrapper.py"
@@ -40,18 +36,15 @@ def _clean_env_for_boltz() -> dict[str, str]:
         ]
         env["PYTHONPATH"] = os.pathsep.join(cleaned)
 
-    # cuequivariance_ops links against CUDA 12 libs (libcublas.so.12,
-    # libnvrtc.so.12) which live in pip nvidia-* packages, not on the
-    # default library path.  Add all nvidia lib dirs we can find.
+    # cuequivariance_ops links against libcublas.so.12 which lives in the
+    # pip nvidia-cublas-cu12 package, not on the default library path.
     try:
-        import nvidia
-        nvidia_root = Path(nvidia.__path__[0])
-        lib_dirs = sorted({str(p.parent) for p in nvidia_root.rglob("lib/*.so*")})
-        if lib_dirs:
+        import nvidia.cublas.lib as _cublas_lib
+        if _cublas_lib.__file__ is not None:
+            cublas_dir = str(Path(_cublas_lib.__file__).parent)
             ld_path = env.get("LD_LIBRARY_PATH", "")
-            extra = os.pathsep.join(d for d in lib_dirs if d not in ld_path)
-            if extra:
-                env["LD_LIBRARY_PATH"] = extra + (os.pathsep + ld_path if ld_path else "")
+            if cublas_dir not in ld_path:
+                env["LD_LIBRARY_PATH"] = cublas_dir + (os.pathsep + ld_path if ld_path else "")
     except ImportError:
         pass
 
@@ -64,8 +57,6 @@ class BoltzResult:
 
     structure_id: str
     plddt: np.ndarray | None  # [N_total] float, 0-1 scale
-    plddt_logits: np.ndarray | None  # [N_total, 50] float, raw logits
-    pde_logits: np.ndarray | None  # [N_total, N_total, 64] float, raw logits
     plddt_logits: np.ndarray | None  # [N_total, 50] float, raw logits
     pde_logits: np.ndarray | None  # [N_total, N_total, 64] float, raw logits
     confidence_json: dict | None  # Full confidence summary
@@ -119,8 +110,6 @@ def build_boltz_command(
         Command as a list of strings suitable for subprocess.run().
     """
     cmd = [
-        sys.executable,
-        str(_WRAPPER_SCRIPT),
         sys.executable,
         str(_WRAPPER_SCRIPT),
         "predict",
@@ -199,36 +188,6 @@ def find_plddt_npz(boltz_out_dir: Path, structure_id: str) -> Path | None:
         Path to the npz file, or None if not found.
     """
     return _find_boltz_output(boltz_out_dir, structure_id, f"plddt_{structure_id}_model_0.npz")
-
-
-def find_plddt_logits_npz(boltz_out_dir: Path, structure_id: str) -> Path | None:
-    """Locate the pLDDT logits npz file in Boltz output directory.
-
-    Args:
-        boltz_out_dir: Root output directory passed to Boltz.
-        structure_id: Structure identifier (stem of the input YAML).
-
-    Returns:
-        Path to the logits npz file, or None if not found.
-    """
-    return _find_boltz_output(
-        boltz_out_dir, structure_id, f"plddt_logits_{structure_id}_model_0.npz"
-    )
-
-
-def find_pde_logits_npz(boltz_out_dir: Path, structure_id: str) -> Path | None:
-    """Locate the PDE logits npz file in Boltz output directory.
-
-    Args:
-        boltz_out_dir: Root output directory passed to Boltz.
-        structure_id: Structure identifier (stem of the input YAML).
-
-    Returns:
-        Path to the PDE logits npz file, or None if not found.
-    """
-    return _find_boltz_output(
-        boltz_out_dir, structure_id, f"pde_logits_{structure_id}_model_0.npz"
-    )
 
 
 def find_plddt_logits_npz(boltz_out_dir: Path, structure_id: str) -> Path | None:
@@ -346,8 +305,6 @@ def run_boltz_predict(
                 plddt=None,
                 plddt_logits=None,
                 pde_logits=None,
-                plddt_logits=None,
-                pde_logits=None,
                 confidence_json=None,
                 success=False,
                 error_msg=error_msg,
@@ -360,25 +317,12 @@ def run_boltz_predict(
                 structure_id=structure_id,
                 plddt=None,
                 plddt_logits=None,
-                pde_logits=None,
                 confidence_json=None,
                 success=False,
                 error_msg=f"pLDDT npz not found in {out_dir}",
             )
 
         plddt = np.load(npz_path)["plddt"]
-
-        # Try to load pLDDT logits
-        plddt_logits = None
-        logits_npz_path = find_plddt_logits_npz(out_dir, structure_id)
-        if logits_npz_path is not None:
-            plddt_logits = np.load(logits_npz_path)["plddt_logits"]
-
-        # Try to load PDE logits
-        pde_logits = None
-        pde_logits_npz_path = find_pde_logits_npz(out_dir, structure_id)
-        if pde_logits_npz_path is not None:
-            pde_logits = np.load(pde_logits_npz_path)["pde_logits"]
 
         # Try to load pLDDT logits
         plddt_logits = None
@@ -404,8 +348,6 @@ def run_boltz_predict(
             plddt=plddt,
             plddt_logits=plddt_logits,
             pde_logits=pde_logits,
-            plddt_logits=plddt_logits,
-            pde_logits=pde_logits,
             confidence_json=conf_json,
             success=True,
             error_msg=None,
@@ -416,7 +358,6 @@ def run_boltz_predict(
             structure_id=structure_id,
             plddt=None,
             plddt_logits=None,
-            pde_logits=None,
             confidence_json=None,
             success=False,
             error_msg=str(e),
@@ -567,18 +508,6 @@ def run_boltz_predict_dir(
         if pde_logits_npz_path is not None:
             pde_logits = np.load(pde_logits_npz_path)["pde_logits"]
 
-        # Try to load pLDDT logits
-        plddt_logits = None
-        logits_npz_path = find_plddt_logits_npz(lookup_dir, sid)
-        if logits_npz_path is not None:
-            plddt_logits = np.load(logits_npz_path)["plddt_logits"]
-
-        # Try to load PDE logits
-        pde_logits = None
-        pde_logits_npz_path = find_pde_logits_npz(lookup_dir, sid)
-        if pde_logits_npz_path is not None:
-            pde_logits = np.load(pde_logits_npz_path)["pde_logits"]
-
         conf_json = None
         json_path = find_confidence_json(lookup_dir, sid)
         if json_path is not None:
@@ -588,8 +517,6 @@ def run_boltz_predict_dir(
         results[sid] = BoltzResult(
             structure_id=sid,
             plddt=plddt,
-            plddt_logits=plddt_logits,
-            pde_logits=pde_logits,
             plddt_logits=plddt_logits,
             pde_logits=pde_logits,
             confidence_json=conf_json,

@@ -4,7 +4,7 @@ defaults:
   - model/quality_graft
   - model/la_proteina_wrapper
   - model/adaptor
-  - model/confidence_head: student
+  - model/confidence_head
   - data/dataset
   - training/default
   - _self_

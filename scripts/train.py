@@ -109,8 +109,6 @@ def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
         num_workers=data_cfg.num_workers,
         transforms=transforms,
         local_only=data_cfg.get("local_only", False),
-        reprocess_boltz=data_cfg.get("reprocess_boltz", False),
-        distillation=cfg.training.get("distillation", False),
     )
 
 
@@ -132,39 +130,21 @@ def build_model(cfg: DictConfig) -> QualityGraft:
     # Adaptor (via Hydra instantiate)
     adaptor = hydra.utils.instantiate(model_cfg.adaptor)
 
-    # Confidence head — dispatch on _target_
+    # Confidence head
     ch_cfg = model_cfg.confidence_head
-    target = ch_cfg.get("_target_", "")
-
-    if "StudentConfidenceHead" in target:
-        from quality_graft.models.student_head import StudentConfidenceHead
-        confidence_head = StudentConfidenceHead(
-            token_s=ch_cfg.token_s,
-            token_z=ch_cfg.token_z,
-            num_blocks=ch_cfg.get("num_blocks", 4),
-            num_heads=ch_cfg.get("num_heads", 16),
-            dropout=ch_cfg.get("dropout", 0.2),
-            pairwise_head_width=ch_cfg.get("pairwise_head_width", 32),
-            pairwise_num_heads=ch_cfg.get("pairwise_num_heads", 4),
-            num_plddt_bins=ch_cfg.get("num_plddt_bins", 50),
-            num_pde_bins=ch_cfg.get("num_pde_bins", 64),
-            predict_pde=ch_cfg.get("predict_pde", True),
-            predict_resolved=ch_cfg.get("predict_resolved", True),
-        )
-    else:
-        confidence_head = BoltzConfidenceHead(
-            token_s=ch_cfg.token_s,
-            token_z=ch_cfg.token_z,
-            pairformer_args=OmegaConf.to_container(ch_cfg.pairformer_args, resolve=True),
-            confidence_model_args=OmegaConf.to_container(ch_cfg.confidence_model_args, resolve=True),
-            full_embedder_args=OmegaConf.to_container(ch_cfg.full_embedder_args, resolve=True),
-            msa_args=OmegaConf.to_container(ch_cfg.msa_args, resolve=True),
-            ckpt_path=ch_cfg.ckpt_path,
-            ckpt_prefix=ch_cfg.ckpt_prefix,
-            device=ch_cfg.device,
-            freeze=ch_cfg.freeze,
-            strict_loading=ch_cfg.strict_loading,
-        )
+    confidence_head = BoltzConfidenceHead(
+        token_s=ch_cfg.token_s,
+        token_z=ch_cfg.token_z,
+        pairformer_args=OmegaConf.to_container(ch_cfg.pairformer_args, resolve=True),
+        confidence_model_args=OmegaConf.to_container(ch_cfg.confidence_model_args, resolve=True),
+        full_embedder_args=OmegaConf.to_container(ch_cfg.full_embedder_args, resolve=True),
+        msa_args=OmegaConf.to_container(ch_cfg.msa_args, resolve=True),
+        ckpt_path=ch_cfg.ckpt_path,
+        ckpt_prefix=ch_cfg.ckpt_prefix,
+        device=ch_cfg.device,
+        freeze=ch_cfg.freeze,
+        strict_loading=ch_cfg.strict_loading,
+    )
 
     return QualityGraft(
         la_proteina=la_proteina,
@@ -186,9 +166,6 @@ def build_lightning_module(cfg: DictConfig, model: QualityGraft) -> QualityGraft
         min_lr=train_cfg.scheduler.min_lr,
         num_plddt_bins=cfg.data.num_plddt_bins,
         debug_mode=train_cfg.get("debug_mode", False),
-        distillation=train_cfg.get("distillation", False),
-        distill_alpha=train_cfg.get("distill_alpha", 0.7),
-        distill_temperature=train_cfg.get("distill_temperature", 2.0),
     )
 
 
