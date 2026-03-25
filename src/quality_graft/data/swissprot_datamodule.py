@@ -135,14 +135,15 @@ class SwissProtDataModule(QualityGraftDataModule):
         graph.residue_type = torch.tensor(
             [resname_to_idx[residue] for residue in graph.residues]
         ).long()
-        graph.bfactor_avg = torch.mean(graph.bfactor, dim=-1)
         graph.residue_pdb_idx = torch.tensor(
             [int(s.split(":")[2]) for s in graph.residue_id], dtype=torch.long
         )
         graph.seq_pos = torch.arange(graph.coords.shape[0]).unsqueeze(-1)
 
         # --- SwissProt additions: pLDDT from B-factor ---
-        graph.plddt = graph.bfactor_avg / 100.0       # B-factor is pLDDT on 0-100 scale
+        # graphein already averages bfactor per residue → bfactor is 1D [n_residues]
+        # Use bfactor directly (not bfactor_avg which is a scalar from mean of 1D)
+        graph.plddt = graph.bfactor / 100.0            # B-factor is pLDDT on 0-100 scale
         graph.plddt_bin = plddt_to_bin(graph.plddt)    # bin to 0..49
         graph.plddt_logits = None                      # hard targets only
         graph.database = "swissprot"

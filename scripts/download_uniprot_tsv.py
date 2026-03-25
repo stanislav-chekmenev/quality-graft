@@ -4,7 +4,7 @@
 Fetches accession and length for all reviewed entries. Run once manually.
 
 Usage:
-    python scripts/download_uniprot_tsv.py --output data/swissprot/uniprot_metadata.tsv
+    python scripts/download_uniprot_tsv.py --output metadata/swissprot/uniprot_metadata.tsv
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ def main():
     parser = argparse.ArgumentParser(description="Download UniProt SwissProt metadata TSV.")
     parser.add_argument(
         "--output",
-        default="data/swissprot/uniprot_metadata.tsv",
-        help="Output TSV path (default: data/swissprot/uniprot_metadata.tsv)",
+        default="metadata/swissprot/uniprot_metadata.tsv",
+        help="Output TSV path (default: metadata/swissprot/uniprot_metadata.tsv)",
     )
     args = parser.parse_args()
 

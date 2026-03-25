@@ -83,6 +83,8 @@ class SwissProtDataSelector(PDBDataSelector):
         logger.info("Loading UniProt metadata from {}", self.metadata_tsv)
         df = pd.read_csv(self.metadata_tsv, sep="\t")
         logger.info("Loaded {} entries from metadata TSV", len(df))
+        df.columns = df.columns.str.lower()
+        df = df.rename(columns={"entry": "accession"})
 
         # Length filters
         if self.min_length is not None:

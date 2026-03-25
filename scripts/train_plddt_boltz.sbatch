@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=qg_train
-#SBATCH --partition=h100
+#SBATCH --partition=gpu
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:h100nvl:2
+#SBATCH --gres=gpu:rtx6000:2
 #SBATCH --ntasks-per-node=2
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=24
-#SBATCH --mem=80G
-#SBATCH --time=1-00:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=2-00:00:00
 #SBATCH --output=logs/train_full_%j.out
 #SBATCH --error=logs/train_full_%j.err
 
@@ -22,7 +22,7 @@ echo "==========================================="
 PROJECT_ROOT="/mnt/labs/home/schekmenev/projects/quality-graft"
 
 NUM_DEVICES=2
-DEVICE_TYPE=h100nvl
+DEVICE_TYPE=rtx6000
 
 if [ "$DEVICE_TYPE" == "rtx6000" ]; then
     DATA_ROOT="/scratch/schekmenev"
@@ -66,20 +66,24 @@ export PYTHONUNBUFFERED=1
 # Create logs directory if it doesn't exist
 mkdir -p "$PROJECT_ROOT/logs"
 
-# --- Stage data to node-local scratch ---
-GROUP_DATA_DIR="/mnt/labs/data/bronstein"
-DIR_NAME="monomers_max_len_128_plddt_boltz_full"
-DATA_SRC="$GROUP_DATA_DIR/$DIR_NAME"
-DATA_DIR="$DATA_ROOT/$DIR_NAME"
+# --- Stage data to node-local scratch (merge multiple preprocessed dirs) ---
+GROUP_DATA_DIR="/mnt/labs/data/bronstein/schekmenev"
+DATA_DIR="$DATA_ROOT/monomers_merged"
 
-echo "Data source: $DATA_SRC"
+SRC_DIRS=(
+    "$GROUP_DATA_DIR/monomers_max_len_128_plddt_boltz_full"
+    "$GROUP_DATA_DIR/monomers_len_128_192_plddt_boltz"
+    "$GROUP_DATA_DIR/monomers_len_192_256_plddt_boltz"
+)
+
 echo "Data target: $DATA_DIR"
 echo "GPUs: ${NUM_DEVICES}x $DEVICE_TYPE"
 
-mkdir -p "$DATA_DIR"
-echo "Staging data to scratch..."
-cp -r "$DATA_SRC/processed" "$DATA_DIR/"
-cp "$DATA_SRC"/*.csv "$DATA_DIR/" 2>/dev/null || true
+echo "Staging pLDDT-labeled data from ${#SRC_DIRS[@]} source dirs..."
+python "$PROJECT_ROOT/scripts/stage_plddt_data.py" \
+    --src-dirs "${SRC_DIRS[@]}" \
+    --dest-dir "$DATA_DIR"
+
 N_PT=$(find "$DATA_DIR/processed" -name "*.pt" | wc -l)
 echo "Staged $N_PT .pt files to $DATA_DIR/processed"
 if [ "$N_PT" -eq 0 ]; then
@@ -110,11 +114,12 @@ export CUDA_LAUNCH_BLOCKING=1
 echo "Starting training..."
 srun python "$PROJECT_ROOT/scripts/train.py" \
     mode=train \
+    data=monomers_with_boltz \
     data.data_dir="$DATA_DIR" \
     data.local_only=true \
-    data.batch_size=6 \
-    data.num_workers=6 \
-    training.max_length=128 \
+    data.batch_size=8 \
+    data.num_workers=8 \
+    training.max_length=256 \
     training.min_length=10 \
     training.accelerator=gpu \
     training.devices=$NUM_DEVICES \
@@ -123,10 +128,10 @@ srun python "$PROJECT_ROOT/scripts/train.py" \
     training.max_epochs=100 \
     training.check_val_every_n_epoch=10 \
     training.checkpoint_dir="$TRAIN_CKPT_DIR" \
-    model.adaptor.n_attn_layers=0 \
+    model.adaptor.n_attn_layers=1 \
     model.la_proteina_wrapper.proteina_ckpt_path="$WEIGHT_DIR/LD1_ucond_notri_512.ckpt" \
     model.la_proteina_wrapper.autoencoder_ckpt_path="$WEIGHT_DIR/AE1_ucond_512.ckpt" \
-    model.confidence_head.ckpt_path="$WEIGHT_DIR/boltz1_conf.ckpt"
+    model/confidence_head=student
 
 # Copy latest run checkpoints back to project root
 LATEST_RUN=$(ls -1td "$TRAIN_CKPT_DIR"/*/ 2>/dev/null | head -1)

@@ -7,7 +7,7 @@ Usage:
     python scripts/copy_swissprot.py \
       --source-dir /mnt/labs/shared/databases/swissprot_pdb_v4/files \
       --dest-dir /scratch/schekmenev/swissprot_v4/raw \
-      --metadata-tsv data/swissprot/uniprot_metadata.tsv \
+      --metadata-tsv data/metadata/swissprot/uniprot_metadata.tsv \
       --min-length 30 \
       --max-length 512
 """
@@ -19,7 +19,11 @@ import shutil
 import sys
 from pathlib import Path
 
+from loguru import logger
 from tqdm import tqdm
+
+logger.remove()
+logger.add(sys.stdout, level="INFO")
 
 # Ensure project paths are importable
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -59,19 +63,21 @@ def main():
         exclude_ids_from_file=args.exclude_ids_file,
     )
 
+    logger.info("Running SwissProtDataSelector.create_dataset()...")
     df = selector.create_dataset()
-    print(f"Filtered: {len(df)} structures")
+    logger.info(f"Filtered: {len(df)} structures")
 
     source_dir = Path(args.source_dir)
+    logger.info("Scanning destination for existing files...")
     existing = set(p.name for p in dest_dir.iterdir() if p.is_file())
-    to_copy = []
-    for _, row in df.iterrows():
-        fname = f"{row['pdb']}.pdb"
-        if fname not in existing:
-            to_copy.append(fname)
 
-    print(f"Already present: {len(df) - len(to_copy)}")
-    print(f"To copy: {len(to_copy)}")
+    logger.info("Found {} existing files in destination".format(len(existing)))
+    logger.info("Determining files to copy...")    
+    all_fnames = [f"{pdb}.pdb" for pdb in df["pdb"]]
+    to_copy = [f for f in all_fnames if f not in existing]
+
+    logger.info(f"Already present: {len(df) - len(to_copy)}")
+    logger.info(f"To copy: {len(to_copy)}")
 
     for fname in tqdm(to_copy, desc="Copying"):
         shutil.copy2(source_dir / fname, dest_dir / fname)
@@ -79,8 +85,8 @@ def main():
     # Save filtered file list
     ids_path = dest_dir.parent / "filtered_ids.txt"
     ids_path.write_text("\n".join(df["accession"].tolist()) + "\n")
-    print(f"Filtered IDs saved to {ids_path}")
-    print(f"Done: {len(to_copy)} copied, {len(df)} total filtered")
+    logger.info(f"Filtered IDs saved to {ids_path}")
+    logger.info(f"Done: {len(to_copy)} copied, {len(df)} total filtered")
 
 
 if __name__ == "__main__":

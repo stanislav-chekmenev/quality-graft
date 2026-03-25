@@ -111,11 +111,11 @@ nsys profile -t cuda,nvtx,osrt -o "$PROJECT_ROOT/logs/job_profile" python "$PROJ
 
 # Copy results to my data dir in the Bronstein group
 echo "Copying results to group data directory..."
-GROUP_DATA_DIR="/mnt/labs/data/bronstein"
+GROUP_DATA_DIR="/mnt/labs/data/bronstein/schekmenev"
 
 mkdir -p "$GROUP_DATA_DIR"
 cp -r "$SCRATCH_DIR" "$GROUP_DATA_DIR/"
-
+    
 echo "==========================================="
 echo "Job completed: $(date)"
 echo "Data at: $GROUP_DATA_DIR"
