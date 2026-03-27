@@ -46,10 +46,18 @@ def main():
     parser.add_argument("--fraction", type=float, default=1.0)
     parser.add_argument("--exclude-ids-file", default=None)
     parser.add_argument("--alphafold-version", type=int, default=4)
+    parser.add_argument("--skip-if-exists", action="store_true",
+                        help="Exit early if dest-dir already has PDB files")
     args = parser.parse_args()
 
     dest_dir = Path(args.dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.skip_if_exists:
+        n_existing = sum(1 for p in dest_dir.iterdir() if p.suffix == ".pdb")
+        if n_existing > 0:
+            logger.info("--skip-if-exists: dest-dir already has {} PDB files, skipping copy", n_existing)
+            return
 
     # Use a temporary data_dir (selector needs it but we don't use it)
     selector = SwissProtDataSelector(

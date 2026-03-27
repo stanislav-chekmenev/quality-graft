@@ -8,7 +8,7 @@ min_length: ${training.min_length}
 format: pdb
 local_only: false
 num_plddt_bins: 50
-train_val_test: [0.8, 0.15, 0.05]
+train_val_test: [0.94, 0.03, 0.03]
 batch_size: ${training.batch_size}
 num_workers: ${training.num_workers}
 fraction: 1.0

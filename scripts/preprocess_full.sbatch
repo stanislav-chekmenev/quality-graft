@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=ds_128_256
+#SBATCH --job-name=ds128_192
 #SBATCH --partition=gpu
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:rtx6000:1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=24
-#SBATCH --time=3-12:00:00
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=32G
+#SBATCH --time=4-00:00:00
 #SBATCH --output=logs/preprocess_full_%j.out
 #SBATCH --error=logs/preprocess_full_%j.err
 
@@ -57,7 +58,7 @@ NUM_DEVICES=1
 
 mkdir -p "$PROJECT_ROOT/logs"
 
-SCRATCH_DIR="$DATA_ROOT/monomers_len_128_256_plddt_boltz_full"
+SCRATCH_DIR="$DATA_ROOT/monomers_128_192_with_logits"
 mkdir -p "$SCRATCH_DIR"
 
 echo "Data directory: $SCRATCH_DIR"
@@ -93,20 +94,20 @@ export NCCL_COMM_ID_TIMEOUT=60
 
 # --- Run full preprocessing ---
 echo "Starting full preprocessing..."
-nsys profile -t cuda,nvtx,osrt -o "$PROJECT_ROOT/logs/job_profile" python "$PROJECT_ROOT/scripts/train.py" \
+srun --kill-on-bad-exit python "$PROJECT_ROOT/scripts/train.py" \
     mode=preprocess \
     data.local_only=false \
     data.data_dir="$SCRATCH_DIR" \
     data.selector_num_workers=8 \
     data.boltz.num_devices=$NUM_DEVICES \
-    data.boltz.chunk_size=5 \
-    data.boltz.max_parallel_samples=5 \
+    data.boltz.chunk_size=10 \
+    data.boltz.max_parallel_samples=10 \
     data.boltz.sampling_steps=50 \
     data.boltz.recycling_steps=1 \
     data.boltz.num_workers=4 \
-    data.boltz.preprocessing_threads=12 \
+    data.boltz.preprocessing_threads=8 \
     data.boltz.timeout_per_structure=120 \
-    training.max_length=256 \
+    training.max_length=192 \
     training.min_length=128
 
 # Copy results to my data dir in the Bronstein group

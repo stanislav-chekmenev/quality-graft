@@ -18,12 +18,15 @@ import hydra
 import lightning as L
 import os
 import sys
+import traceback
 
 from loguru import logger
 from datetime import datetime
 from pathlib import Path
+from datetime import timedelta
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
+from lightning.pytorch.strategies import DDPStrategy
 from omegaconf import DictConfig, OmegaConf
 
 # Ensure project paths are importable
@@ -304,12 +307,20 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
             )
         )
 
+    # Use DDPStrategy with short timeout so a single-GPU OOM kills the job fast
+    strategy_name = train_cfg.get("strategy", "auto")
+    if strategy_name == "ddp":
+        nccl_timeout = timedelta(minutes=train_cfg.get("nccl_timeout_min", 2))
+        strategy = DDPStrategy(timeout=nccl_timeout)
+    else:
+        strategy = strategy_name
+
     return L.Trainer(
         max_epochs=train_cfg.max_epochs,
         precision=train_cfg.precision,
         accelerator=train_cfg.get("accelerator", "auto"),
         devices=train_cfg.get("devices", 1),
-        strategy=train_cfg.get("strategy", "auto"),
+        strategy=strategy,
         gradient_clip_val=train_cfg.gradient_clip_val,
         accumulate_grad_batches=train_cfg.accumulate_grad_batches,
         log_every_n_steps=train_cfg.get("log_every_n_steps", 50),
@@ -328,8 +339,8 @@ def main(cfg: DictConfig) -> None:
 
     mode = cfg.get("mode", "train")
 
-    logger.info("Mode: %s", mode)
-    logger.info("Config:\n%s", OmegaConf.to_yaml(cfg))
+    logger.info("Mode: {}", mode)
+    logger.info("Config:\n{}", OmegaConf.to_yaml(cfg))
 
     if mode == "preprocess":
         # Init W&B run for preprocessing
@@ -347,7 +358,7 @@ def main(cfg: DictConfig) -> None:
                     config=OmegaConf.to_container(cfg, resolve=True),
                 )
             except Exception as e:
-                logger.warning("W&B init failed, continuing without logging: %s", e)
+                logger.warning("W&B init failed, continuing without logging: {}", e)
 
         dm = build_data_module(cfg)
         dm.prepare_data()
@@ -357,10 +368,10 @@ def main(cfg: DictConfig) -> None:
             protein_stats = collect_dataset_stats(dm.processed_dir)
             log_dataset_summary(protein_stats)
             logger.info(
-                "Dataset summary logged: %d labeled structures.", len(protein_stats)
+                "Dataset summary logged: {} labeled structures.", len(protein_stats)
             )
         except Exception as e:
-            logger.warning("Dataset summary logging failed: %s", e)
+            logger.warning("Dataset summary logging failed: {}", e)
 
         try:
             import wandb
@@ -380,14 +391,31 @@ def main(cfg: DictConfig) -> None:
         trainer = build_trainer(cfg)
 
         logger.info(
-            "Trainable params: %d, Frozen params: %d",
+            "Trainable params: {}, Frozen params: {}",
             model.num_trainable_parameters(),
             model.num_frozen_parameters(),
         )
 
         rank = int(os.environ.get("SLURM_PROCID", 0))
         print(f"[RANK {rank}] Calling trainer.fit()...", flush=True)
-        trainer.fit(lit_module, datamodule=dm)
+        try:
+            trainer.fit(lit_module, datamodule=dm)
+        except Exception as e:
+            tb = traceback.format_exc()
+            logger.error("[RANK {}] Training failed:\n{}", rank, tb)
+            # Log error to W&B so it's visible in the dashboard
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.run.alert(
+                        title=f"RANK {rank} crashed",
+                        text=str(e),
+                        level=wandb.AlertLevel.ERROR,
+                    )
+                    wandb.finish(exit_code=1)
+            except Exception:
+                pass
+            sys.exit(1)
         print(f"[RANK {rank}] trainer.fit() returned.", flush=True)
     else:
         raise ValueError(f"Unknown mode: {mode}. Use 'preprocess' or 'train'.")

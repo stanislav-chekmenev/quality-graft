@@ -5,8 +5,8 @@
 #SBATCH --gres=gpu:h100nvl:2
 #SBATCH --ntasks-per-node=2
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=12
-#SBATCH --mem=48G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
 #SBATCH --time=3-00:00:00
 #SBATCH --output=logs/train_swissprot_%j.out
 #SBATCH --error=logs/train_swissprot_%j.err
@@ -114,18 +114,17 @@ export NCCL_DEBUG=INFO
 export NCCL_IB_DISABLE=1           # Disable InfiniBand if not available
 export NCCL_P2P_DISABLE=1          # Force SHM instead of P2P
 export NCCL_SHM_DISABLE=0          # Ensure shared memory transport is enabled
-export CUDA_LAUNCH_BLOCKING=1
 
 # --- Run training ---
 echo "Starting training (student distillation mode)..."
-srun python "$PROJECT_ROOT/scripts/train.py" \
+srun --kill-on-bad-exit python "$PROJECT_ROOT/scripts/train.py" \
     mode=train \
     data=swissprot \
     data.data_dir="$SWISSPROT_DIR" \
     data.source_dir=/mnt/labs/shared/databases/swissprot_pdb_v4/files \
     data.metadata_tsv="$METADATA_TSV" \
-    data.batch_size=8 \
-    data.num_workers=6 \
+    data.batch_size=3 \
+    data.num_workers=3 \
     training.max_length=$MAX_LENGTH \
     training.min_length=$MIN_LENGTH \
     training.accelerator=gpu \
@@ -133,9 +132,9 @@ srun python "$PROJECT_ROOT/scripts/train.py" \
     training.strategy=ddp \
     training.precision=bf16-mixed \
     training.max_epochs=50 \
-    training.check_val_every_n_epoch=2 \
+    training.check_val_every_n_epoch=1 \
     training.checkpoint_dir="$TRAIN_CKPT_DIR" \
-    model.adaptor.n_attn_layers=0 \
+    model.adaptor.n_attn_layers=1 \
     model.la_proteina_wrapper.proteina_ckpt_path="$WEIGHT_DIR/LD1_ucond_notri_512.ckpt" \
     model.la_proteina_wrapper.autoencoder_ckpt_path="$WEIGHT_DIR/AE1_ucond_512.ckpt" \
     model/confidence_head=student

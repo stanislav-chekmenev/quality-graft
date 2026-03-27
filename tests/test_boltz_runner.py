@@ -65,6 +65,7 @@ class TestRunBoltzPredictDir:
             pred_dir = out_dir / "predictions" / sid
             pred_dir.mkdir(parents=True)
             np.savez(pred_dir / f"plddt_{sid}_model_0.npz", plddt=np.array([0.8, 0.9]))
+            np.savez(pred_dir / f"plddt_logits_{sid}_model_0.npz", plddt_logits=np.random.randn(2, 50))
 
         mock_proc = MagicMock()
         mock_proc.returncode = 0
@@ -85,6 +86,7 @@ class TestRunBoltzPredictDir:
         assert len(result.results) == 2
         assert result.results["1ubq_A"].success is True
         assert result.results["2abc_B"].success is True
+        assert result.results["1ubq_A"].plddt_logits is not None
         np.testing.assert_array_equal(result.results["1ubq_A"].plddt, [0.8, 0.9])
 
     def test_partial_results_on_crash(self, tmp_path):
@@ -102,6 +104,7 @@ class TestRunBoltzPredictDir:
         pred_dir = out_dir / "predictions" / "1ubq_A"
         pred_dir.mkdir(parents=True)
         np.savez(pred_dir / "plddt_1ubq_A_model_0.npz", plddt=np.array([0.7]))
+        np.savez(pred_dir / "plddt_logits_1ubq_A_model_0.npz", plddt_logits=np.random.randn(1, 50))
 
         mock_proc = MagicMock()
         mock_proc.returncode = 1
@@ -165,6 +168,7 @@ class TestRunBoltzPredictDir:
             pred_dir = out_dir / "boltz_results_inputs" / "predictions" / sid
             pred_dir.mkdir(parents=True)
             np.savez(pred_dir / f"plddt_{sid}_model_0.npz", plddt=np.array([0.85, 0.92]))
+            np.savez(pred_dir / f"plddt_logits_{sid}_model_0.npz", plddt_logits=np.random.randn(2, 50))
 
         mock_proc = MagicMock()
         mock_proc.returncode = 0

@@ -7,6 +7,7 @@ entirely from a pre-downloaded UniProt metadata TSV and a directory of PDB files
 from __future__ import annotations
 
 import pathlib
+import re
 from typing import List, Optional
 
 import pandas as pd
@@ -70,6 +71,11 @@ class SwissProtDataSelector(PDBDataSelector):
     def create_dataset(self) -> pd.DataFrame:
         """Filter SwissProt structures by metadata and filesystem presence.
 
+        If ``filtered_ids.txt`` exists in *data_dir* (written by
+        ``copy_swissprot.py``), the expensive source-dir filesystem
+        cross-reference is skipped entirely — accessions are loaded from
+        that file and joined with the metadata TSV for lengths only.
+
         Returns
         -------
         pd.DataFrame
@@ -79,6 +85,14 @@ class SwissProtDataSelector(PDBDataSelector):
             return self.df_data
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        filtered_ids_path = self.data_dir / "filtered_ids.txt"
+        if not filtered_ids_path.exists():
+            self._maybe_generate_filtered_ids(filtered_ids_path)
+
+        if filtered_ids_path.exists():
+            self.df_data = self._load_from_filtered_ids(filtered_ids_path)
+            return self.df_data
 
         logger.info("Loading UniProt metadata from {}", self.metadata_tsv)
         df = pd.read_csv(self.metadata_tsv, sep="\t")
@@ -122,3 +136,47 @@ class SwissProtDataSelector(PDBDataSelector):
         df["id"] = df["pdb"]
         self.df_data = df[["pdb", "id", "accession", "length"]].reset_index(drop=True)
         return self.df_data
+
+    def _maybe_generate_filtered_ids(self, filtered_ids_path: pathlib.Path) -> None:
+        """Generate filtered_ids.txt from PDB files already present in data_dir/raw/."""
+        raw_dir = self.data_dir / "raw"
+        if not raw_dir.is_dir():
+            return
+
+        pattern = re.compile(r"^AF-(.+)-F1-model_v\d+\.pdb$")
+        accessions = []
+        for p in raw_dir.iterdir():
+            m = pattern.match(p.name)
+            if m:
+                accessions.append(m.group(1))
+
+        if not accessions:
+            return
+
+        accessions.sort()
+        filtered_ids_path.write_text("\n".join(accessions) + "\n")
+        logger.info(
+            "Generated {} with {} accessions from existing raw/ files",
+            filtered_ids_path, len(accessions),
+        )
+
+    def _load_from_filtered_ids(self, filtered_ids_path: pathlib.Path) -> pd.DataFrame:
+        """Build dataset from pre-computed filtered_ids.txt, skipping filesystem scan."""
+        logger.info("Loading pre-filtered IDs from {}", filtered_ids_path)
+        accessions = [
+            line.strip() for line in filtered_ids_path.read_text().splitlines()
+            if line.strip()
+        ]
+        logger.info("Loaded {} accessions from filtered_ids.txt", len(accessions))
+
+        # Load metadata just for lengths
+        df = pd.read_csv(self.metadata_tsv, sep="\t")
+        df.columns = df.columns.str.lower()
+        df = df.rename(columns={"entry": "accession"})
+        df = df[df["accession"].isin(set(accessions))]
+        logger.info("{} entries matched in metadata TSV", len(df))
+
+        v = self.alphafold_version
+        df["pdb"] = df["accession"].apply(lambda acc: f"AF-{acc}-F1-model_v{v}")
+        df["id"] = df["pdb"]
+        return df[["pdb", "id", "accession", "length"]].reset_index(drop=True)

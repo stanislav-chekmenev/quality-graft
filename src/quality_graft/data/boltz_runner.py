@@ -324,11 +324,19 @@ def run_boltz_predict(
 
         plddt = np.load(npz_path)["plddt"]
 
-        # Try to load pLDDT logits
-        plddt_logits = None
+        # Load pLDDT logits (required — the wrapper always produces them)
         logits_npz_path = find_plddt_logits_npz(out_dir, structure_id)
-        if logits_npz_path is not None:
-            plddt_logits = np.load(logits_npz_path)["plddt_logits"]
+        if logits_npz_path is None:
+            return BoltzResult(
+                structure_id=structure_id,
+                plddt=None,
+                plddt_logits=None,
+                pde_logits=None,
+                confidence_json=None,
+                success=False,
+                error_msg=f"pLDDT logits npz not found in {out_dir} despite pLDDT existing",
+            )
+        plddt_logits = np.load(logits_npz_path)["plddt_logits"]
 
         # Try to load PDE logits
         pde_logits = None
@@ -496,11 +504,16 @@ def run_boltz_predict_dir(
 
         plddt = np.load(npz_path)["plddt"]
 
-        # Try to load pLDDT logits
-        plddt_logits = None
+        # Load pLDDT logits (required — the wrapper always produces them)
         logits_npz_path = find_plddt_logits_npz(lookup_dir, sid)
-        if logits_npz_path is not None:
-            plddt_logits = np.load(logits_npz_path)["plddt_logits"]
+        if logits_npz_path is None:
+            logger.warning(
+                "[{}] pLDDT logits npz not found under {} despite pLDDT existing. "
+                "Was boltz_predict_wrapper.py used?",
+                sid, lookup_dir,
+            )
+            continue
+        plddt_logits = np.load(logits_npz_path)["plddt_logits"]
 
         # Try to load PDE logits
         pde_logits = None

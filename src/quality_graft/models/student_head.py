@@ -86,7 +86,8 @@ class StudentConfidenceHead(nn.Module):
 
         # Final layer norms
         self.final_s_norm = nn.LayerNorm(token_s)
-        self.final_z_norm = nn.LayerNorm(token_z)
+        if predict_pde:
+            self.final_z_norm = nn.LayerNorm(token_z)
 
         # Prediction heads
         self.to_plddt_logits = nn.Linear(token_s, num_plddt_bins)
@@ -134,7 +135,6 @@ class StudentConfidenceHead(nn.Module):
         )
 
         s = self.final_s_norm(s)
-        z = self.final_z_norm(z)
 
         outputs: dict[str, Tensor] = {
             "plddt_logits": self.to_plddt_logits(s),

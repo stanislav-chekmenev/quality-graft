@@ -33,7 +33,7 @@ def _make_fake_graph(pdb_id: str, n_residues: int = 10, has_plddt: bool = False)
 
 def _make_batch_result(
     structure_plddt_map: dict[str, np.ndarray | None],
-    include_logits: bool = False,
+    include_logits: bool = True,
 ) -> BoltzBatchResult:
     """Build a BoltzBatchResult from a {structure_id: plddt_array} dict."""
     results = {}

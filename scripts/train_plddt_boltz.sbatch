@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=qg_train
-#SBATCH --partition=gpu
+#SBATCH --partition=h100
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:rtx6000:2
+#SBATCH --gres=gpu:h100nvl:2
 #SBATCH --ntasks-per-node=2
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=2-00:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=24G
+#SBATCH --time=4-00:00:00
 #SBATCH --output=logs/train_full_%j.out
 #SBATCH --error=logs/train_full_%j.err
 
@@ -22,7 +22,7 @@ echo "==========================================="
 PROJECT_ROOT="/mnt/labs/home/schekmenev/projects/quality-graft"
 
 NUM_DEVICES=2
-DEVICE_TYPE=rtx6000
+DEVICE_TYPE=h100nvl
 
 if [ "$DEVICE_TYPE" == "rtx6000" ]; then
     DATA_ROOT="/scratch/schekmenev"
@@ -72,8 +72,7 @@ DATA_DIR="$DATA_ROOT/monomers_merged"
 
 SRC_DIRS=(
     "$GROUP_DATA_DIR/monomers_max_len_128_plddt_boltz_full"
-    "$GROUP_DATA_DIR/monomers_len_128_192_plddt_boltz"
-    "$GROUP_DATA_DIR/monomers_len_192_256_plddt_boltz"
+    "$GROUP_DATA_DIR/monomers_len_128_256_plddt_boltz"
 )
 
 echo "Data target: $DATA_DIR"
@@ -106,19 +105,18 @@ mkdir -p "$TRAIN_CKPT_DIR"
 # ── NCCL tuning (critical for multi-GPU stability) ────────────────
 export NCCL_DEBUG=INFO
 export NCCL_IB_DISABLE=1           # Disable InfiniBand if not available
-export NCCL_P2P_DISABLE=1          # Force SHM instead of P2P 
+export NCCL_P2P_DISABLE=1          # Force SHM instead of P2P
 export NCCL_SHM_DISABLE=0          # Ensure shared memory transport is enabled
-export CUDA_LAUNCH_BLOCKING=1
 
 # --- Run training ---
 echo "Starting training..."
-srun python "$PROJECT_ROOT/scripts/train.py" \
+srun --kill-on-bad-exit python "$PROJECT_ROOT/scripts/train.py" \
     mode=train \
     data=monomers_with_boltz \
     data.data_dir="$DATA_DIR" \
     data.local_only=true \
-    data.batch_size=8 \
-    data.num_workers=8 \
+    data.batch_size=3 \
+    data.num_workers=3 \
     training.max_length=256 \
     training.min_length=10 \
     training.accelerator=gpu \
