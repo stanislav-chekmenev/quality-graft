@@ -45,7 +45,7 @@ def test_run_boltz_pass_saves_plddt(tmp_path):
             "test_structure": BoltzResult(
                 structure_id="test_structure",
                 plddt=fake_plddt,
-                plddt_logits=None,
+                plddt_logits=np.random.randn(50, 50).astype(np.float32),
                 pde_logits=None,
                 confidence_json=None,
                 success=True,

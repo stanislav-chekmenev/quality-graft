@@ -412,12 +412,20 @@ class QualityGraftDataModule(PDBLightningDataModule):
                     plddt_status[sid] = False
                     continue
 
+                if boltz_result.plddt_logits is None:
+                    logger.warning(
+                        "[{}] pLDDT logits missing despite successful Boltz run, skipping.",
+                        sid,
+                    )
+                    chunk_failed += 1
+                    plddt_status[sid] = False
+                    continue
+
                 graph.plddt = torch.tensor(plddt_np, dtype=torch.float32)
                 graph.plddt_bin = plddt_to_bin(graph.plddt, num_bins=self.num_plddt_bins)
-                if boltz_result.plddt_logits is not None:
-                    graph.plddt_logits = torch.tensor(
-                        boltz_result.plddt_logits, dtype=torch.float32,
-                    )
+                graph.plddt_logits = torch.tensor(
+                    boltz_result.plddt_logits, dtype=torch.float32,
+                )
                 if boltz_result.pde_logits is not None:
                     graph.pde_logits = torch.tensor(
                         boltz_result.pde_logits, dtype=torch.float32,

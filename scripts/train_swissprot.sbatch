@@ -1,18 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=qg_train
+#SBATCH --job-name=qg_swissprot
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:h100nvl:2
 #SBATCH --ntasks-per-node=2
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=24
-#SBATCH --mem=80G
-#SBATCH --time=1-00:00:00
-#SBATCH --output=logs/train_full_%j.out
-#SBATCH --error=logs/train_full_%j.err
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
+#SBATCH --time=3-00:00:00
+#SBATCH --output=logs/train_swissprot_%j.out
+#SBATCH --error=logs/train_swissprot_%j.err
 
 echo "==========================================="
-echo "Job started: $(date)"
+echo "SwissProt training started: $(date)"
 echo "Running on: $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPU devices: $CUDA_VISIBLE_DEVICES"
@@ -31,9 +31,6 @@ elif [ "$DEVICE_TYPE" == "h100nvl" ]; then
 fi
 
 # Unpack .venv to scratch (once per node, skips if already present)
-# Create tarball on login node:
-#   uv venv --relocatable --python 3.11 && uv sync
-#   tar czf "$PROJECT_ROOT/venv.tar.gz" -C "$PROJECT_ROOT" .venv
 ENV_TARBALL="$PROJECT_ROOT/venv.tar.gz"
 ENV_LOCAL="$DATA_ROOT/.venv"
 
@@ -66,69 +63,83 @@ export PYTHONUNBUFFERED=1
 # Create logs directory if it doesn't exist
 mkdir -p "$PROJECT_ROOT/logs"
 
-# --- Stage data to node-local scratch ---
-GROUP_DATA_DIR="/mnt/labs/data/bronstein"
-DIR_NAME="monomers_max_len_128_plddt_boltz_full"
-DATA_SRC="$GROUP_DATA_DIR/$DIR_NAME"
-DATA_DIR="$DATA_ROOT/$DIR_NAME"
+# --- Copy SwissProt data to scratch ---
+SWISSPROT_DIR="$DATA_ROOT/swissprot_v4"
+METADATA_TSV="$PROJECT_ROOT/data/metadata/swissprot/uniprot_metadata.tsv"
 
-echo "Data source: $DATA_SRC"
-echo "Data target: $DATA_DIR"
-echo "GPUs: ${NUM_DEVICES}x $DEVICE_TYPE"
+# SwissProt filtering parameters
+MIN_LENGTH=30
+MAX_LENGTH=256
 
-mkdir -p "$DATA_DIR"
-echo "Staging data to scratch..."
-cp -r "$DATA_SRC/processed" "$DATA_DIR/"
-cp "$DATA_SRC"/*.csv "$DATA_DIR/" 2>/dev/null || true
-N_PT=$(find "$DATA_DIR/processed" -name "*.pt" | wc -l)
-echo "Staged $N_PT .pt files to $DATA_DIR/processed"
-if [ "$N_PT" -eq 0 ]; then
-    echo "ERROR: No .pt files staged. Aborting."
+echo "Copying filtered SwissProt PDBs to $SWISSPROT_DIR/raw ..."
+python "$PROJECT_ROOT/scripts/copy_swissprot.py" \
+    --source-dir /mnt/labs/shared/databases/swissprot_pdb_v4/files \
+    --dest-dir "$SWISSPROT_DIR/raw" \
+    --metadata-tsv "$METADATA_TSV" \
+    --min-length $MIN_LENGTH \
+    --max-length $MAX_LENGTH
+
+N_PDB=$(find "$SWISSPROT_DIR/raw" -name "*.pdb" | wc -l)
+echo "SwissProt raw PDBs on scratch: $N_PDB"
+if [ "$N_PDB" -eq 0 ]; then
+    echo "ERROR: No PDB files copied. Aborting."
     exit 1
 fi
 
-# Stage model weights to node-local scratch
+# --- Stage La-Proteina model weights to scratch ---
 WEIGHT_DIR="$DATA_ROOT/ckpt"
 mkdir -p "$WEIGHT_DIR"
-echo "Staging model weights to $WEIGHT_DIR..."
-cp -v "$PROJECT_ROOT/ckpt/"*.ckpt "$WEIGHT_DIR/"
-echo "Weight staging complete."
+echo "Staging La-Proteina model weights to $WEIGHT_DIR..."
+for ckpt in "$PROJECT_ROOT/ckpt/"*.ckpt; do
+    if [[ $(basename "$ckpt") != "boltz1_conf.ckpt" ]]; then
+        cp -v "$ckpt" "$WEIGHT_DIR/"
+    fi
+done
+echo "La-Proteina weight staging complete."
 
 # Training checkpoint directory (scratch, fast I/O)
 TRAIN_CKPT_DIR="$DATA_ROOT/ckpt/runs"
 mkdir -p "$TRAIN_CKPT_DIR"
 
+echo ""
+echo "Configuration:"
+echo "  Data dir:    $SWISSPROT_DIR"
+echo "  Weights:     $WEIGHT_DIR"
+echo "  Checkpoints: $TRAIN_CKPT_DIR"
+echo "  GPUs:        ${NUM_DEVICES}x $DEVICE_TYPE"
+echo ""
 
 # ── NCCL tuning (critical for multi-GPU stability) ────────────────
 export NCCL_DEBUG=INFO
 export NCCL_IB_DISABLE=1           # Disable InfiniBand if not available
-export NCCL_P2P_DISABLE=1          # Force SHM instead of P2P 
+export NCCL_P2P_DISABLE=1          # Force SHM instead of P2P
 export NCCL_SHM_DISABLE=0          # Ensure shared memory transport is enabled
-export CUDA_LAUNCH_BLOCKING=1
 
 # --- Run training ---
-echo "Starting training..."
-srun python "$PROJECT_ROOT/scripts/train.py" \
+echo "Starting training (student distillation mode)..."
+srun --kill-on-bad-exit python "$PROJECT_ROOT/scripts/train.py" \
     mode=train \
-    data.data_dir="$DATA_DIR" \
-    data.local_only=true \
-    data.batch_size=6 \
-    data.num_workers=6 \
-    training.max_length=128 \
-    training.min_length=10 \
+    data=swissprot \
+    data.data_dir="$SWISSPROT_DIR" \
+    data.source_dir=/mnt/labs/shared/databases/swissprot_pdb_v4/files \
+    data.metadata_tsv="$METADATA_TSV" \
+    data.batch_size=3 \
+    data.num_workers=3 \
+    training.max_length=$MAX_LENGTH \
+    training.min_length=$MIN_LENGTH \
     training.accelerator=gpu \
     training.devices=$NUM_DEVICES \
     training.strategy=ddp \
     training.precision=bf16-mixed \
-    training.max_epochs=100 \
-    training.check_val_every_n_epoch=10 \
+    training.max_epochs=50 \
+    training.check_val_every_n_epoch=1 \
     training.checkpoint_dir="$TRAIN_CKPT_DIR" \
-    model.adaptor.n_attn_layers=0 \
+    model.adaptor.n_attn_layers=1 \
     model.la_proteina_wrapper.proteina_ckpt_path="$WEIGHT_DIR/LD1_ucond_notri_512.ckpt" \
     model.la_proteina_wrapper.autoencoder_ckpt_path="$WEIGHT_DIR/AE1_ucond_512.ckpt" \
-    model.confidence_head.ckpt_path="$WEIGHT_DIR/boltz1_conf.ckpt"
+    model/confidence_head=student
 
-# Copy latest run checkpoints back to project root
+# --- Copy checkpoints back ---
 LATEST_RUN=$(ls -1td "$TRAIN_CKPT_DIR"/*/ 2>/dev/null | head -1)
 if [ -n "$LATEST_RUN" ]; then
     RUN_NAME=$(basename "$LATEST_RUN")
@@ -138,7 +149,6 @@ if [ -n "$LATEST_RUN" ]; then
 else
     echo "No checkpoint runs found to copy."
 fi
-
 
 echo "==========================================="
 echo "Job completed: $(date)"

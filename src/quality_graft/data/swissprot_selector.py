@@ -1,0 +1,182 @@
+"""SwissProtDataSelector — metadata-based filtering for AlphaFold SwissProt PDB files.
+
+Unlike PDBDataSelector which queries RCSB via PDBManager, this selector works
+entirely from a pre-downloaded UniProt metadata TSV and a directory of PDB files.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import re
+from typing import List, Optional
+
+import pandas as pd
+from loguru import logger
+
+from la_proteina.proteinfoundation.datasets.pdb_data import PDBDataSelector
+
+
+class SwissProtDataSelector(PDBDataSelector):
+    """Select AlphaFold SwissProt structures by metadata filtering + filesystem check.
+
+    Parameters
+    ----------
+    source_dir : str
+        Path to shared SwissProt PDB directory (e.g. /mnt/labs/shared/databases/swissprot_pdb_v4/files).
+    metadata_tsv : str
+        Path to UniProt TSV file with accession and length columns.
+    alphafold_version : int
+        AlphaFold model version for filename pattern (default 4).
+    """
+
+    def __init__(
+        self,
+        data_dir: str,
+        source_dir: str,
+        metadata_tsv: str,
+        alphafold_version: int = 4,
+        fraction: float = 1.0,
+        min_length: Optional[int] = None,
+        max_length: Optional[int] = None,
+        exclude_ids: Optional[List[str]] = None,
+        exclude_ids_from_file: Optional[str] = None,
+        num_workers: int = 32,
+    ):
+        super().__init__(
+            data_dir=data_dir,
+            fraction=fraction,
+            min_length=min_length,
+            max_length=max_length,
+            exclude_ids=exclude_ids,
+            exclude_ids_from_file=exclude_ids_from_file,
+            num_workers=num_workers,
+            molecule_type=None,
+            experiment_types=None,
+            oligomeric_min=None,
+            oligomeric_max=None,
+            best_resolution=None,
+            worst_resolution=None,
+            has_ligands=None,
+            remove_ligands=None,
+            remove_non_standard_residues=False,
+            remove_pdb_unavailable=False,
+            labels=None,
+            remove_cath_unavailable=False,
+        )
+        self.database = "swissprot"
+        self.source_dir = pathlib.Path(source_dir)
+        self.metadata_tsv = pathlib.Path(metadata_tsv)
+        self.alphafold_version = alphafold_version
+
+    def create_dataset(self) -> pd.DataFrame:
+        """Filter SwissProt structures by metadata and filesystem presence.
+
+        If ``filtered_ids.txt`` exists in *data_dir* (written by
+        ``copy_swissprot.py``), the expensive source-dir filesystem
+        cross-reference is skipped entirely — accessions are loaded from
+        that file and joined with the metadata TSV for lengths only.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: pdb, id, accession, length. No chain or sequence columns.
+        """
+        if self.df_data is not None:
+            return self.df_data
+
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        filtered_ids_path = self.data_dir / "filtered_ids.txt"
+        if not filtered_ids_path.exists():
+            self._maybe_generate_filtered_ids(filtered_ids_path)
+
+        if filtered_ids_path.exists():
+            self.df_data = self._load_from_filtered_ids(filtered_ids_path)
+            return self.df_data
+
+        logger.info("Loading UniProt metadata from {}", self.metadata_tsv)
+        df = pd.read_csv(self.metadata_tsv, sep="\t")
+        logger.info("Loaded {} entries from metadata TSV", len(df))
+        df.columns = df.columns.str.lower()
+        df = df.rename(columns={"entry": "accession"})
+
+        # Length filters
+        if self.min_length is not None:
+            df = df[df["length"] >= self.min_length]
+            logger.info("{} entries after min_length={} filter", len(df), self.min_length)
+        if self.max_length is not None:
+            df = df[df["length"] <= self.max_length]
+            logger.info("{} entries after max_length={} filter", len(df), self.max_length)
+
+        # Fraction sampling
+        if self.fraction < 1.0:
+            df = df.sample(frac=self.fraction)
+            logger.info("{} entries after fraction={} sampling", len(df), self.fraction)
+
+        # Exclude IDs
+        all_exclude = set()
+        if self.exclude_ids:
+            all_exclude.update(self.exclude_ids)
+        if self.exclude_ids_from_file:
+            with open(self.exclude_ids_from_file) as f:
+                all_exclude.update(line.strip() for line in f if line.strip())
+        if all_exclude:
+            df = df[~df["accession"].isin(all_exclude)]
+            logger.info("{} entries after excluding {} IDs", len(df), len(all_exclude))
+
+        # Build expected filenames and cross-reference against source_dir
+        v = self.alphafold_version
+        df["pdb"] = df["accession"].apply(lambda acc: f"AF-{acc}-F1-model_v{v}")
+        df["filename"] = df["pdb"] + ".pdb"
+
+        existing_files = set(p.name for p in self.source_dir.iterdir() if p.is_file())
+        df = df[df["filename"].isin(existing_files)]
+        logger.info("{} entries after filesystem cross-reference", len(df))
+
+        df["id"] = df["pdb"]
+        self.df_data = df[["pdb", "id", "accession", "length"]].reset_index(drop=True)
+        return self.df_data
+
+    def _maybe_generate_filtered_ids(self, filtered_ids_path: pathlib.Path) -> None:
+        """Generate filtered_ids.txt from PDB files already present in data_dir/raw/."""
+        raw_dir = self.data_dir / "raw"
+        if not raw_dir.is_dir():
+            return
+
+        pattern = re.compile(r"^AF-(.+)-F1-model_v\d+\.pdb$")
+        accessions = []
+        for p in raw_dir.iterdir():
+            m = pattern.match(p.name)
+            if m:
+                accessions.append(m.group(1))
+
+        if not accessions:
+            return
+
+        accessions.sort()
+        filtered_ids_path.write_text("\n".join(accessions) + "\n")
+        logger.info(
+            "Generated {} with {} accessions from existing raw/ files",
+            filtered_ids_path, len(accessions),
+        )
+
+    def _load_from_filtered_ids(self, filtered_ids_path: pathlib.Path) -> pd.DataFrame:
+        """Build dataset from pre-computed filtered_ids.txt, skipping filesystem scan."""
+        logger.info("Loading pre-filtered IDs from {}", filtered_ids_path)
+        accessions = [
+            line.strip() for line in filtered_ids_path.read_text().splitlines()
+            if line.strip()
+        ]
+        logger.info("Loaded {} accessions from filtered_ids.txt", len(accessions))
+
+        # Load metadata just for lengths
+        df = pd.read_csv(self.metadata_tsv, sep="\t")
+        df.columns = df.columns.str.lower()
+        df = df.rename(columns={"entry": "accession"})
+        df = df[df["accession"].isin(set(accessions))]
+        logger.info("{} entries matched in metadata TSV", len(df))
+
+        v = self.alphafold_version
+        df["pdb"] = df["accession"].apply(lambda acc: f"AF-{acc}-F1-model_v{v}")
+        df["id"] = df["pdb"]
+        return df[["pdb", "id", "accession", "length"]].reset_index(drop=True)

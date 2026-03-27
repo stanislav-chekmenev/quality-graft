@@ -13,25 +13,21 @@ Usage:
 
 from __future__ import annotations
 
-import sys
-
-from loguru import logger
-
-logger.info("Importing modules...")
-
-from datetime import datetime
-from pathlib import Path
-
-import os
 
 import hydra
 import lightning as L
+import os
+import sys
+import traceback
+
+from loguru import logger
+from datetime import datetime
+from pathlib import Path
+from datetime import timedelta
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
+from lightning.pytorch.strategies import DDPStrategy
 from omegaconf import DictConfig, OmegaConf
-
-logger.info("Modules imported successfully.")
-
 
 # Ensure project paths are importable
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -47,11 +43,14 @@ from la_proteina.proteinfoundation.datasets.pdb_data import (
 )
 import la_proteina.proteinfoundation.datasets.transforms as lp_transforms
 from quality_graft.data.datamodule import QualityGraftDataModule
+from quality_graft.data.swissprot_selector import SwissProtDataSelector
+from quality_graft.data.swissprot_datamodule import SwissProtDataModule
 from quality_graft.data.wandb_logger import collect_dataset_stats, log_dataset_summary
 
 from quality_graft.models.confidence_head import BoltzConfidenceHead
 from quality_graft.models.la_proteina_wrapper import LaProteinaWrapper
 from quality_graft.models.quality_graft import QualityGraft
+from quality_graft.models.student_head import StudentConfidenceHead
 from quality_graft.training.lightning_module import QualityGraftLightningModule
 
 
@@ -66,8 +65,80 @@ class TransformWrapper:
         return self._call(None, data)
 
 
-def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
+class DropPairwiseFields:
+    """Remove (L, L, ...) fields that break La-Proteina's pad_sequence collation.
+
+    pad_sequence only pads dim 0; fields where dim 1 also equals the
+    variable sequence length cause a size mismatch across the batch.
+    """
+
+    def __init__(self, keys=("pde_logits",)):
+        self.keys = keys
+
+    def __call__(self, data):
+        for k in self.keys:
+            if hasattr(data, k):
+                delattr(data, k)
+        return data
+
+
+def build_data_module(cfg: DictConfig):
     """Build the data module from Hydra config."""
+    data_cfg = cfg.data
+    database = data_cfg.get("database", "pdb")
+
+    if database == "swissprot":
+        return _build_swissprot_data_module(data_cfg)
+    else:
+        return _build_pdb_data_module(cfg)
+
+
+def _build_swissprot_data_module(data_cfg: DictConfig) -> SwissProtDataModule:
+    """Build SwissProtDataModule from config."""
+    split_type = data_cfg.get("split_type", "random")
+    if split_type != "random":
+        raise ValueError(
+            f"SwissProt only supports split_type='random', got '{split_type}'. "
+            "Sequence-similarity splitting requires a sequence column."
+        )
+
+    dataselector = SwissProtDataSelector(
+        data_dir=data_cfg.data_dir,
+        source_dir=data_cfg.source_dir,
+        metadata_tsv=data_cfg.metadata_tsv,
+        alphafold_version=data_cfg.get("alphafold_version", 4),
+        fraction=data_cfg.get("fraction", 1.0),
+        min_length=data_cfg.min_length,
+        max_length=data_cfg.max_length,
+        exclude_ids=data_cfg.get("exclude_ids", None),
+        exclude_ids_from_file=data_cfg.get("exclude_ids_from_file", None),
+        num_workers=data_cfg.get("selector_num_workers", 32),
+    )
+    datasplitter = PDBDataSplitter(
+        data_dir=data_cfg.data_dir,
+        train_val_test=list(data_cfg.train_val_test),
+    )
+    transforms = [
+        TransformWrapper(lp_transforms.CoordsToNanometers),
+        TransformWrapper(lp_transforms.CenterStructureTransform),
+        DropPairwiseFields(),
+    ]
+    return SwissProtDataModule(
+        data_dir=data_cfg.data_dir,
+        source_dir=data_cfg.source_dir,
+        dataselector=dataselector,
+        datasplitter=datasplitter,
+        format="pdb",
+        boltz_config={},
+        num_plddt_bins=data_cfg.num_plddt_bins,
+        batch_size=data_cfg.batch_size,
+        num_workers=data_cfg.num_workers,
+        transforms=transforms,
+    )
+
+
+def _build_pdb_data_module(cfg: DictConfig) -> QualityGraftDataModule:
+    """Build QualityGraftDataModule for PDB data (existing path)."""
     data_cfg = cfg.data
 
     if data_cfg.get("local_only", False):
@@ -96,6 +167,7 @@ def build_data_module(cfg: DictConfig) -> QualityGraftDataModule:
     transforms = [
         TransformWrapper(lp_transforms.CoordsToNanometers),
         TransformWrapper(lp_transforms.CenterStructureTransform),
+        DropPairwiseFields(),
     ]
 
     return QualityGraftDataModule(
@@ -130,21 +202,38 @@ def build_model(cfg: DictConfig) -> QualityGraft:
     # Adaptor (via Hydra instantiate)
     adaptor = hydra.utils.instantiate(model_cfg.adaptor)
 
-    # Confidence head
+    # Confidence head — either frozen BoltzConfidenceHead or trainable StudentConfidenceHead
     ch_cfg = model_cfg.confidence_head
-    confidence_head = BoltzConfidenceHead(
-        token_s=ch_cfg.token_s,
-        token_z=ch_cfg.token_z,
-        pairformer_args=OmegaConf.to_container(ch_cfg.pairformer_args, resolve=True),
-        confidence_model_args=OmegaConf.to_container(ch_cfg.confidence_model_args, resolve=True),
-        full_embedder_args=OmegaConf.to_container(ch_cfg.full_embedder_args, resolve=True),
-        msa_args=OmegaConf.to_container(ch_cfg.msa_args, resolve=True),
-        ckpt_path=ch_cfg.ckpt_path,
-        ckpt_prefix=ch_cfg.ckpt_prefix,
-        device=ch_cfg.device,
-        freeze=ch_cfg.freeze,
-        strict_loading=ch_cfg.strict_loading,
-    )
+    target = ch_cfg.get("_target_", "quality_graft.models.confidence_head.BoltzConfidenceHead")
+
+    if "StudentConfidenceHead" in target:
+        confidence_head = StudentConfidenceHead(
+            token_s=ch_cfg.token_s,
+            token_z=ch_cfg.token_z,
+            num_blocks=ch_cfg.get("num_blocks", 4),
+            num_heads=ch_cfg.get("num_heads", 16),
+            dropout=ch_cfg.get("dropout", 0.2),
+            pairwise_head_width=ch_cfg.get("pairwise_head_width", 32),
+            pairwise_num_heads=ch_cfg.get("pairwise_num_heads", 4),
+            num_plddt_bins=ch_cfg.get("num_plddt_bins", 50),
+            num_pde_bins=ch_cfg.get("num_pde_bins", 64),
+            predict_pde=ch_cfg.get("predict_pde", True),
+            predict_resolved=ch_cfg.get("predict_resolved", True),
+        )
+    else:
+        confidence_head = BoltzConfidenceHead(
+            token_s=ch_cfg.token_s,
+            token_z=ch_cfg.token_z,
+            pairformer_args=OmegaConf.to_container(ch_cfg.pairformer_args, resolve=True),
+            confidence_model_args=OmegaConf.to_container(ch_cfg.confidence_model_args, resolve=True),
+            full_embedder_args=OmegaConf.to_container(ch_cfg.full_embedder_args, resolve=True),
+            msa_args=OmegaConf.to_container(ch_cfg.msa_args, resolve=True),
+            ckpt_path=ch_cfg.ckpt_path,
+            ckpt_prefix=ch_cfg.ckpt_prefix,
+            device=ch_cfg.device,
+            freeze=ch_cfg.freeze,
+            strict_loading=ch_cfg.strict_loading,
+        )
 
     return QualityGraft(
         la_proteina=la_proteina,
@@ -166,6 +255,8 @@ def build_lightning_module(cfg: DictConfig, model: QualityGraft) -> QualityGraft
         min_lr=train_cfg.scheduler.min_lr,
         num_plddt_bins=cfg.data.num_plddt_bins,
         debug_mode=train_cfg.get("debug_mode", False),
+        distill_alpha=train_cfg.get("distill_alpha", 0.7),
+        distill_temperature=train_cfg.get("distill_temperature", 2.0),
     )
 
 
@@ -216,12 +307,20 @@ def build_trainer(cfg: DictConfig) -> L.Trainer:
             )
         )
 
+    # Use DDPStrategy with short timeout so a single-GPU OOM kills the job fast
+    strategy_name = train_cfg.get("strategy", "auto")
+    if strategy_name == "ddp":
+        nccl_timeout = timedelta(minutes=train_cfg.get("nccl_timeout_min", 2))
+        strategy = DDPStrategy(timeout=nccl_timeout)
+    else:
+        strategy = strategy_name
+
     return L.Trainer(
         max_epochs=train_cfg.max_epochs,
         precision=train_cfg.precision,
         accelerator=train_cfg.get("accelerator", "auto"),
         devices=train_cfg.get("devices", 1),
-        strategy=train_cfg.get("strategy", "auto"),
+        strategy=strategy,
         gradient_clip_val=train_cfg.gradient_clip_val,
         accumulate_grad_batches=train_cfg.accumulate_grad_batches,
         log_every_n_steps=train_cfg.get("log_every_n_steps", 50),
@@ -240,8 +339,8 @@ def main(cfg: DictConfig) -> None:
 
     mode = cfg.get("mode", "train")
 
-    logger.info("Mode: %s", mode)
-    logger.info("Config:\n%s", OmegaConf.to_yaml(cfg))
+    logger.info("Mode: {}", mode)
+    logger.info("Config:\n{}", OmegaConf.to_yaml(cfg))
 
     if mode == "preprocess":
         # Init W&B run for preprocessing
@@ -259,7 +358,7 @@ def main(cfg: DictConfig) -> None:
                     config=OmegaConf.to_container(cfg, resolve=True),
                 )
             except Exception as e:
-                logger.warning("W&B init failed, continuing without logging: %s", e)
+                logger.warning("W&B init failed, continuing without logging: {}", e)
 
         dm = build_data_module(cfg)
         dm.prepare_data()
@@ -269,10 +368,10 @@ def main(cfg: DictConfig) -> None:
             protein_stats = collect_dataset_stats(dm.processed_dir)
             log_dataset_summary(protein_stats)
             logger.info(
-                "Dataset summary logged: %d labeled structures.", len(protein_stats)
+                "Dataset summary logged: {} labeled structures.", len(protein_stats)
             )
         except Exception as e:
-            logger.warning("Dataset summary logging failed: %s", e)
+            logger.warning("Dataset summary logging failed: {}", e)
 
         try:
             import wandb
@@ -292,14 +391,31 @@ def main(cfg: DictConfig) -> None:
         trainer = build_trainer(cfg)
 
         logger.info(
-            "Trainable params: %d, Frozen params: %d",
+            "Trainable params: {}, Frozen params: {}",
             model.num_trainable_parameters(),
             model.num_frozen_parameters(),
         )
 
         rank = int(os.environ.get("SLURM_PROCID", 0))
         print(f"[RANK {rank}] Calling trainer.fit()...", flush=True)
-        trainer.fit(lit_module, datamodule=dm)
+        try:
+            trainer.fit(lit_module, datamodule=dm)
+        except Exception as e:
+            tb = traceback.format_exc()
+            logger.error("[RANK {}] Training failed:\n{}", rank, tb)
+            # Log error to W&B so it's visible in the dashboard
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.run.alert(
+                        title=f"RANK {rank} crashed",
+                        text=str(e),
+                        level=wandb.AlertLevel.ERROR,
+                    )
+                    wandb.finish(exit_code=1)
+            except Exception:
+                pass
+            sys.exit(1)
         print(f"[RANK {rank}] trainer.fit() returned.", flush=True)
     else:
         raise ValueError(f"Unknown mode: {mode}. Use 'preprocess' or 'train'.")

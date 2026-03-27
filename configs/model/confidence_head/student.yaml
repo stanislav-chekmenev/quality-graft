@@ -1,0 +1,17 @@
+# Student confidence head for distillation training
+# Replaces the frozen 48-block BoltzConfidenceHead with a small trainable network.
+# Use: override confidence_head config in CLI with
+#   model/confidence_head=student_head
+_target_: quality_graft.models.student_head.StudentConfidenceHead
+
+token_s: 384
+token_z: 128
+num_blocks: 4
+num_heads: 16
+dropout: 0.2
+pairwise_head_width: 32
+pairwise_num_heads: 4
+num_plddt_bins: 50
+num_pde_bins: 64
+predict_pde: false
+predict_resolved: false
