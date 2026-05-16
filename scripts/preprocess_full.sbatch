@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ds128_192
+#SBATCH --job-name=ds193_256
 #SBATCH --partition=gpu
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:rtx6000:1
@@ -58,9 +58,9 @@ NUM_DEVICES=1
 
 mkdir -p "$PROJECT_ROOT/logs"
 
-SCRATCH_DIR="$DATA_ROOT/monomers_128_192_with_logits"
+SCRATCH_DIR="$DATA_ROOT/monomers_193_256_with_logits"
 mkdir -p "$SCRATCH_DIR"
-
+    
 echo "Data directory: $SCRATCH_DIR"
 
 # Stage model weights to fast scratch (for follow-up train jobs)
@@ -107,12 +107,12 @@ srun --kill-on-bad-exit python "$PROJECT_ROOT/scripts/train.py" \
     data.boltz.num_workers=4 \
     data.boltz.preprocessing_threads=8 \
     data.boltz.timeout_per_structure=120 \
-    training.max_length=192 \
-    training.min_length=128
+    training.max_length=256 \
+    training.min_length=193
 
 # Copy results to my data dir in the Bronstein group
 echo "Copying results to group data directory..."
-GROUP_DATA_DIR="/mnt/labs/data/bronstein/schekmenev"
+GROUP_DATA_DIR="/mnt/labs/data/bronstein/schekmenev/monomers_193_256_with_logits"
 
 mkdir -p "$GROUP_DATA_DIR"
 cp -r "$SCRATCH_DIR" "$GROUP_DATA_DIR/"
