@@ -145,6 +145,47 @@ class TestPrepareDataNoSuperCall:
                 mock_super.assert_not_called()
 
 
+class TestPrepareDataLocalOnly:
+    """local_only=True must skip preprocessing without a dataselector."""
+
+    def _local_only_dm(self, tmpdir):
+        data_dir = Path(tmpdir) / "data"
+        (data_dir / "processed").mkdir(parents=True)
+        from la_proteina.proteinfoundation.datasets.pdb_data import PDBDataSplitter
+
+        return SwissProtDataModule(
+            data_dir=str(data_dir),
+            source_dir=str(Path(tmpdir) / "source"),
+            dataselector=None,
+            datasplitter=PDBDataSplitter(data_dir=str(data_dir)),
+            format="pdb",
+            boltz_config={},
+            local_only=True,
+        )
+
+    def test_prepare_data_skips_when_pt_present(self):
+        """With .pt files present, prepare_data returns without touching the
+        (None) dataselector. Regression for the AttributeError at the
+        _get_file_identifier(self.dataselector) call."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dm = self._local_only_dm(tmpdir)
+            torch.save(Data(), dm.processed_dir / "AF-P12345-F1-model_v4.pt")
+
+            with patch(
+                "quality_graft.data.datamodule.QualityGraftDataModule.prepare_data"
+            ) as mock_super:
+                dm.prepare_data()  # must not raise
+                mock_super.assert_not_called()
+
+    def test_prepare_data_raises_when_no_pt(self):
+        """local_only with an empty processed dir raises an informative
+        RuntimeError, not an AttributeError on the None selector."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dm = self._local_only_dm(tmpdir)
+            with pytest.raises(RuntimeError, match="no .pt files found"):
+                dm.prepare_data()
+
+
 class TestPrepareDataWritesPlddtStatus:
     def test_plddt_status_csv_created(self):
         """prepare_data writes plddt_status.csv with all processed structures."""
