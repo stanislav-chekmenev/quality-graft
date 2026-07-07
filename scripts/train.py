@@ -102,18 +102,22 @@ def _build_swissprot_data_module(data_cfg: DictConfig) -> SwissProtDataModule:
             "Sequence-similarity splitting requires a sequence column."
         )
 
-    dataselector = SwissProtDataSelector(
-        data_dir=data_cfg.data_dir,
-        source_dir=data_cfg.source_dir,
-        metadata_tsv=data_cfg.metadata_tsv,
-        alphafold_version=data_cfg.get("alphafold_version", 4),
-        fraction=data_cfg.get("fraction", 1.0),
-        min_length=data_cfg.min_length,
-        max_length=data_cfg.max_length,
-        exclude_ids=data_cfg.get("exclude_ids", None),
-        exclude_ids_from_file=data_cfg.get("exclude_ids_from_file", None),
-        num_workers=data_cfg.get("selector_num_workers", 32),
-    )
+    local_only = data_cfg.get("local_only", False)
+    if local_only:
+        dataselector = None
+    else:
+        dataselector = SwissProtDataSelector(
+            data_dir=data_cfg.data_dir,
+            source_dir=data_cfg.source_dir,
+            metadata_tsv=data_cfg.metadata_tsv,
+            alphafold_version=data_cfg.get("alphafold_version", 4),
+            fraction=data_cfg.get("fraction", 1.0),
+            min_length=data_cfg.min_length,
+            max_length=data_cfg.max_length,
+            exclude_ids=data_cfg.get("exclude_ids", None),
+            exclude_ids_from_file=data_cfg.get("exclude_ids_from_file", None),
+            num_workers=data_cfg.get("selector_num_workers", 32),
+        )
     datasplitter = PDBDataSplitter(
         data_dir=data_cfg.data_dir,
         train_val_test=list(data_cfg.train_val_test),
@@ -134,6 +138,7 @@ def _build_swissprot_data_module(data_cfg: DictConfig) -> SwissProtDataModule:
         batch_size=data_cfg.batch_size,
         num_workers=data_cfg.num_workers,
         transforms=transforms,
+        local_only=local_only,
     )
 
 
