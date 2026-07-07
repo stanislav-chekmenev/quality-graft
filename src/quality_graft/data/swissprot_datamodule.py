@@ -45,6 +45,22 @@ class SwissProtDataModule(QualityGraftDataModule):
         Does NOT call super().prepare_data() — that would trigger Boltz-1
         prediction from QualityGraftDataModule.
         """
+        if self.local_only:
+            # Data already preprocessed — skip all preprocessing. Mirrors the
+            # base QualityGraftDataModule.prepare_data guard; without it the
+            # dataselector-less local_only path dereferences None below.
+            if not self.processed_dir.exists() or not any(self.processed_dir.glob("*.pt")):
+                raise RuntimeError(
+                    f"local_only=True but no .pt files found in {self.processed_dir}. "
+                    "Run preprocessing first."
+                )
+            logger.info(
+                "local_only=True: skipping prepare_data entirely, "
+                "{} .pt files in {}",
+                len(list(self.processed_dir.glob("*.pt"))), self.processed_dir,
+            )
+            return
+
         file_identifier = self._get_file_identifier(self.dataselector)
         df_data_name = f"{file_identifier}.csv"
 
